@@ -19,11 +19,6 @@ async function migrate() {
     await pool.query(seed);
     console.log('2. Datos de siembra insertados');
 
-    const extraPath = path.join(__dirname, 'seed-extra.sql');
-    const extra = fs.readFileSync(extraPath, 'utf-8');
-    await pool.query(extra);
-    console.log('3. Datos extra insertados (sensores, históricos)');
-
     console.log('Migracion completada exitosamente');
   } catch (error) {
     console.error('Error en migracion:', error.message);
