@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import pool from '../config/database.js';
+import { prisma } from './prismaClient.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const cmd = process.argv[2]; // 'reset' opcional
@@ -11,12 +11,12 @@ async function migrate() {
   try {
     const schemaPath = path.join(__dirname, 'schema.sql');
     const schema = fs.readFileSync(schemaPath, 'utf-8');
-    await pool.query(schema);
+    await prisma.$executeRawUnsafe(schema);
     console.log('1. Esquema creado exitosamente');
 
     const seedPath = path.join(__dirname, 'seed.sql');
     const seed = fs.readFileSync(seedPath, 'utf-8');
-    await pool.query(seed);
+    await prisma.$executeRawUnsafe(seed);
     console.log('2. Datos de siembra insertados');
 
     console.log('Migracion completada exitosamente');
@@ -24,7 +24,7 @@ async function migrate() {
     console.error('Error en migracion:', error.message);
     process.exit(1);
   } finally {
-    await pool.end();
+    await prisma.$disconnect();
   }
 }
 
@@ -33,7 +33,7 @@ async function reset() {
   try {
     const resetPath = path.join(__dirname, 'reset.sql');
     const resetSql = fs.readFileSync(resetPath, 'utf-8');
-    await pool.query(resetSql);
+    await prisma.$executeRawUnsafe(resetSql);
     console.log('Tablas transaccionales limpiadas');
     console.log('Parámetros reiniciados a valores por defecto');
     console.log('Datos maestros preservados (roles, unidades, tipos)');
@@ -42,7 +42,7 @@ async function reset() {
     console.error('Error en reset:', error.message);
     process.exit(1);
   } finally {
-    await pool.end();
+    await prisma.$disconnect();
   }
 }
 

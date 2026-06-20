@@ -11,6 +11,7 @@ if (!process.env.JWT_SECRET) {
   process.exit(1);
 }
 
+import { prisma } from './db/prismaClient.js';
 import authRoutes from './routes/auth.js';
 import riegoRoutes from './routes/riego.js';
 import canterosRoutes from './routes/canteros.js';
@@ -24,16 +25,19 @@ import bitacoraRoutes from './routes/bitacora.js';
 import sensoresRoutes from './routes/sensores.js';
 import dashboardRoutes from './routes/dashboard.js';
 import setupRoutes from './routes/setup.js';
+import categoriasRoutes from './routes/categorias.js';
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = parseInt(process.env.PORT || '3001', 10);
 
 app.use(helmet());
-app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:3000' }));
+app.use(cors({ origin: process.env.CORS_ORIGIN || true }));
 app.use(morgan('dev'));
 app.use(express.json());
 
-app.get('/api/health', (_req, res) => {
+import { Request, Response } from 'express';
+
+app.get('/api/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), version: '1.0.0' });
 });
 
@@ -48,15 +52,16 @@ app.use('/api/parametros', parametrosRoutes);
 app.use('/api/historial', historialRoutes);
 app.use('/api/bitacora', bitacoraRoutes);
 app.use('/api', sensoresRoutes);
+app.use('/api/categorias', categoriasRoutes);
 app.use('/api', dashboardRoutes);
 app.use('/api/setup', setupRoutes);
 
-app.use((err, _req, res, _next) => {
+app.use((err: any, _req: any, res: any, _next: any) => {
   console.error('Error no manejado:', err);
   res.status(500).json({ error: 'Error interno del servidor' });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`SAGRIH API corriendo en http://localhost:${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/api/health`);
 });

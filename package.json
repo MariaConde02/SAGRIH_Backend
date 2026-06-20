@@ -3,21 +3,33 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node --watch src/index.js",
-    "start": "node src/index.js",
-    "db:create": "node src/db/migrate.js",
-    "db:seed": "node src/db/migrate.js",
-    "db:reset": "node src/db/migrate.js reset",
-    "hash": "node -e \"import('bcryptjs').then(b => { console.log(b.hashSync(process.argv[1] || 'sagrih123', 10)); })\""
+    "dev": "tsx --watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "db:create": "tsx src/db/migrate.ts",
+    "db:seed": "tsx src/db/migrate.ts",
+    "db:reset": "tsx src/db/migrate.ts reset",
+    "hash": "tsx -e \"import('bcryptjs').then(b => { console.log(b.hashSync(process.argv[1] || 'sagrih123', 10)); })\""
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "cors": "^2.8.5",
-    "pg": "^8.11.3",
-    "jsonwebtoken": "^9.0.2",
+    "@prisma/client": "^5.22.0",
     "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
     "dotenv": "^16.3.1",
+    "express": "^4.18.2",
     "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/morgan": "^1.9.10",
+    "@types/node": "^26.0.0",
+    "@types/pg": "^8.20.0",
+    "prisma": "^5.22.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
   }
 }

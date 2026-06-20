@@ -54,7 +54,8 @@ INSERT INTO TM_TIPOD (TIPOD_NM) VALUES
     ('Sensor CO2'),
     ('Sensor pH'),
     ('Bomba'),
-    ('Actuador')
+    ('Actuador'),
+    ('Sensor Nivel Tanque')
 ON CONFLICT (TIPOD_NM) DO NOTHING;
 
 -- TM_CULTI
@@ -78,7 +79,7 @@ ON CONFLICT (TIPAL_NM) DO NOTHING;
 
 -- TM_USUAR: solo administrador
 INSERT INTO TM_USUAR (USUAR_NM, USUAR_AP, USUAR_EM, USUAR_PW, USUAR_MN, ROLES_ID, USUAR_EST) VALUES
-    ('Administrador', 'SAGRIH', 'administradorsagrih@gmail.com', '$2a$10$PS9oMNYGBUlnlRjC1uRbGuf.UQAWGo3aEBEZ7EO1Pfa.fABj3ENyG', 'email', 1, 'activo')
+    ('Administrador', 'SAGRIH', 'administradorsagrih@gmail.com', '$2a$10$c4vj44vLGEeG/4MjjeGIYuBdJI5kNSoK27/Vvly7IDJn0r2qH9aA.', 'email', 1, 'activo')
 ON CONFLICT (USUAR_EM) DO NOTHING;
 
 -- TP_PARAM

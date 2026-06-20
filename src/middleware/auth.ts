@@ -1,9 +1,9 @@
 import jwt from 'jsonwebtoken';
-import pool from '../config/database.js';
+import { prisma } from '../db/prismaClient.js';
 
-const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET || 'sagrih-jwt-secret-key-2026';
 
-export function generateToken(user) {
+export function generateToken(user: any) {
   return jwt.sign(
     {
       id: user.usuar_id,
@@ -14,11 +14,11 @@ export function generateToken(user) {
       rolNombre: user.roles_nm,
     },
     JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
+    { expiresIn: '24h' } as jwt.SignOptions
   );
 }
 
-export function authMiddleware(req, res, next) {
+export function authMiddleware(req: any, res: any, next: any) {
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Token de autenticación requerido' });
@@ -32,17 +32,19 @@ export function authMiddleware(req, res, next) {
   }
 }
 
-export function requirePermiso(permisoNm) {
-  return async (req, res, next) => {
+export function requirePermission(permisoNm: string) {
+  return async (req: any, res: any, next: any) => {
     if (!req.user) return res.status(401).json({ error: 'Autenticación requerida' });
     try {
-      const result = await pool.query(
-        `SELECT 1 FROM TT_ROLPE rp
-         JOIN TM_PERMI p ON p.PERMI_ID = rp.PERMI_ID
-         WHERE rp.ROLES_ID = $1 AND p.PERMI_NM = $2`,
-        [req.user.rolId, permisoNm]
-      );
-      if (result.rows.length === 0) {
+      const existePermiso = await prisma.tt_rolpe.findFirst({
+        where: {
+          roles_id: req.user.rolId,
+          tm_permi: {
+            permi_nm: permisoNm
+          }
+        }
+      });
+      if (!existePermiso) {
         return res.status(403).json({ error: `Permiso requerido: ${permisoNm}` });
       }
       next();
