@@ -15,7 +15,7 @@ export async function obtenerNivelTanque() {
   const sensorResult = await prisma.tt_lectu.findMany({
     where: {
       tt_dispo: {
-        tm_tipod: { tipod_nm: 'Sensor Nivel Agua' }
+        tm_tipod: { tipod_nm: 'Sensor Nivel Tanque' }
       }
     },
     orderBy: { lectu_fh: 'desc' },

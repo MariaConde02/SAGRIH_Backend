@@ -1,6 +1,8 @@
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import { prisma } from '../db/prismaClient.js';
 import { generateToken } from '../middleware/auth.js';
+import { EmailService } from './emailService.js';
 
 export async function loginUser(email: string, password: string) {
   if (!email || !password) {
@@ -35,6 +37,7 @@ export async function loginUser(email: string, password: string) {
   const token = generateToken(user);
   return {
     token,
+    requirePasswordChange: user.usuar_reqpw,
     user: {
       id: user.usuar_id,
       nombre: user.usuar_nm,
@@ -109,4 +112,75 @@ export async function getCurrentUser(authorizationHeader: string) {
     rol: u.tm_roles?.roles_nm,
     medioNotificacion: u.usuar_mn,
   };
+}
+
+export async function changePassword(userId: number, currentPassword?: string, newPassword?: string) {
+  if (!newPassword || newPassword.length < 8) {
+    const err: any = new Error('La nueva contraseña debe tener al menos 8 caracteres');
+    err.statusCode = 400;
+    throw err;
+  }
+  
+  const user = await prisma.tm_usuar.findUnique({ where: { usuar_id: userId } });
+  if (!user) {
+    const err: any = new Error('Usuario no encontrado');
+    err.statusCode = 404;
+    throw err;
+  }
+  
+  const hashedPassword = await bcrypt.hash(newPassword, 10);
+  
+  await prisma.tm_usuar.update({
+    where: { usuar_id: userId },
+    data: {
+      usuar_pw: hashedPassword,
+      usuar_reqpw: false
+    }
+  });
+  
+  return { message: 'Contraseña actualizada correctamente' };
+}
+
+export async function recoverPassword(email: string) {
+  const user = await prisma.tm_usuar.findFirst({
+    where: { usuar_em: email, usuar_est: 'activo' }
+  });
+
+  if (!user) {
+    const error: any = new Error('Lo sentimos, ese correo no está registrado. Intente con uno que sea correcto.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  // Generamos una nueva clave provisional fuerte
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()';
+  let provisionalPassword = '';
+  for (let i = 0; i < 8; i++) {
+    provisionalPassword += chars.charAt(crypto.randomInt(0, chars.length));
+  }
+  // Asegurar que cumpla (mayúscula, número, especial)
+  provisionalPassword += 'A1!'; // Append to guarantee requirements
+
+  const hashedPassword = await bcrypt.hash(provisionalPassword, 10);
+
+  await prisma.tm_usuar.update({
+    where: { usuar_id: user.usuar_id },
+    data: {
+      usuar_pw: hashedPassword,
+      usuar_reqpw: true
+    }
+  });
+
+  await EmailService.sendDynamicEmail({
+    to_email: email,
+    to_name: user.usuar_nm,
+    subject: 'Recuperación de Contraseña - SAGRIH',
+    title: 'Recuperación de Contraseña',
+    message: 'Hemos recibido una solicitud para recuperar tu contraseña. Por seguridad, hemos generado una contraseña provisional para tu acceso. Recuerda que deberás cambiarla inmediatamente tras iniciar sesión.',
+    extra_data: `Tu contraseña provisional es: <strong>${provisionalPassword}</strong>`,
+    link: 'http://localhost:5173/login',
+    contextName: 'correo de recuperación de contraseña'
+  });
+
+  return { message: 'Si el correo existe, se han enviado las instrucciones de recuperación.' };
 }

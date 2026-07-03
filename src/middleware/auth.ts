@@ -11,7 +11,7 @@ export function generateToken(user: any) {
       apellido: user.usuar_ap,
       email: user.usuar_em,
       rolId: user.roles_id,
-      rolNombre: user.roles_nm,
+      rolNombre: user.tm_roles?.roles_nm,
     },
     JWT_SECRET,
     { expiresIn: '24h' } as jwt.SignOptions
@@ -54,3 +54,19 @@ export function requirePermission(permisoNm: string) {
     }
   };
 }
+
+export function checkRole(allowedRoles: string[]) {
+  return (req: any, res: any, next: any) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Acceso denegado. No autenticado.' });
+    }
+    const userRole = req.user.rolNombre;
+    if (!allowedRoles.includes(userRole)) {
+      return res.status(403).json({ 
+        error: `Acceso denegado. Rol insuficiente (${userRole}). Se requiere: ${allowedRoles.join(' o ')}.` 
+      });
+    }
+    next();
+  };
+}
+

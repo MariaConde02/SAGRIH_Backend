@@ -27,28 +27,113 @@ router.get('/consumo-semanal', async (_req, res) => {
   }
 });
 
-router.get('/riegos', async (_req, res) => {
+router.get('/riegos/meses', async (_req, res) => {
   try {
+    const result = await prisma.$queryRaw<any[]>`
+       SELECT DISTINCT TO_CHAR(RIHRI_FI, 'YYYY-MM') AS month
+       FROM TH_RIHRI
+       WHERE RIHRI_FI IS NOT NULL
+       ORDER BY month DESC
+    `;
+    res.json(result.map(r => r.month));
+  } catch (error: any) {
+    console.error('Error en meses:', error.message);
+    res.json([]);
+  }
+});
+
+router.get('/riegos', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 20;
+    const month = req.query.month as string;
+    const tipo = req.query.tipo as string;
+    const cantero = req.query.cantero as string;
+    const startDate = req.query.startDate as string;
+    const endDate = req.query.endDate as string;
+    const isExport = limit > 1000;
+
+    const where: any = {};
+
+    if (cantero) {
+      where.cante_id = cantero;
+    }
+
+    if (tipo) {
+      where.rihri_ta = { contains: tipo, mode: 'insensitive' };
+    }
+
+    if (startDate && endDate) {
+      where.rihri_fi = {
+        gte: new Date(startDate),
+        lte: new Date(endDate)
+      };
+    } else if (month) { 
+      // If a specific month is selected (e.g. '2026-06')
+      const startOfMonth = new Date(`${month}-01T00:00:00.000Z`);
+      const endOfMonth = new Date(startOfMonth.getFullYear(), startOfMonth.getMonth() + 1, 0, 23, 59, 59, 999);
+      where.rihri_fi = {
+        gte: startOfMonth,
+        lte: endOfMonth
+      };
+    } else {
+      // "Mes actual" default
+      const now = new Date();
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      where.rihri_fi = {
+        gte: startOfMonth
+      };
+    }
+
+    const totalResult = await prisma.th_rihri.aggregate({
+      _count: { rihri_id: true },
+      _sum: { rihri_vl: true },
+      where
+    });
+    const total = totalResult._count.rihri_id;
+    const totalLitros = totalResult._sum.rihri_vl || 0;
+
     const riegos = await prisma.th_rihri.findMany({
+      where,
       include: {
         tm_cante: true,
         tm_usuar: true
       },
       orderBy: { rihri_fi: 'desc' },
-      take: 100
+      skip: isExport ? undefined : (page - 1) * limit,
+      take: isExport ? undefined : limit
     });
     
-    res.json(riegos.map(r => ({
-      id: r.rihri_id,
-      fecha: r.rihri_fi,
-      cantero: r.tm_cante?.cante_nm,
-      litros: r.rihri_vl,
-      usuario: r.tm_usuar?.usuar_nm || r.rihri_ta,
-      tipo: r.rihri_ta,
-    })));
+    const data = riegos.map(r => {
+      let duracionStr = "—";
+      if (r.rihri_fi && r.rihri_ff) {
+        const diffMs = new Date(r.rihri_ff).getTime() - new Date(r.rihri_fi).getTime();
+        const diffMins = Math.round(diffMs / 60000);
+        if (diffMins > 0) duracionStr = `${diffMins}m`;
+      }
+      return {
+        id: r.rihri_id,
+        fecha: r.rihri_fi,
+        cantero: r.tm_cante?.cante_nm,
+        litros: r.rihri_vl,
+        usuario: r.tm_usuar?.usuar_nm || r.rihri_ta,
+        tipo: r.rihri_ta,
+        duracion: duracionStr
+      };
+    });
+
+    res.json({
+       data,
+       meta: {
+         total,
+         totalLitros,
+         page: isExport ? 1 : page,
+         totalPages: isExport ? 1 : Math.ceil(total / limit)
+       }
+    });
   } catch (error: any) {
     console.error('Error en historial riegos:', error.message);
-    res.json([]);
+    res.json({ data: [], meta: { total: 0, page: 1, totalPages: 1 } });
   }
 });
 
@@ -76,6 +161,44 @@ router.get('/mantenimiento', async (_req, res) => {
   } catch (error: any) {
     console.error('Error en mantenimiento:', error.message);
     res.json([]);
+  }
+});
+
+router.post('/mantenimiento/programar', async (req, res) => {
+  try {
+    const { tarea, usuarId, dispoId, observaciones, recurrencia } = req.body;
+    
+    // Si recurrencia es 'unica', simplemente insertamos en th_mante
+    if (!recurrencia || recurrencia === 'unica') {
+      const nuevo = await prisma.th_mante.create({
+        data: {
+          mante_ta: tarea,
+          usuar_id: usuarId ? parseInt(usuarId, 10) : null,
+          dispo_id: dispoId || null,
+          mante_ob: observaciones,
+          mante_re: false,
+        }
+      });
+      return res.json(nuevo);
+    }
+    
+    // Si es programado, insertamos en tt_manpr
+    const prog = await prisma.tt_manpr.create({
+      data: {
+        manpr_ta: tarea,
+        usuar_id: usuarId ? parseInt(usuarId, 10) : null,
+        dispo_id: dispoId || null,
+        manpr_ob: observaciones,
+        manpr_rp: recurrencia,
+        manpr_nx: new Date(),
+        manpr_st: true
+      }
+    });
+    
+    res.json(prog);
+  } catch (error: any) {
+    console.error('Error al programar mantenimiento:', error.message);
+    res.status(500).json({ error: 'Error al programar mantenimiento' });
   }
 });
 

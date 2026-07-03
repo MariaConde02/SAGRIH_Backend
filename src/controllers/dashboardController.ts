@@ -29,3 +29,13 @@ export async function obtenerEficiencia(req, res) {
     res.status(500).json({ error: 'Error al obtener eficiencia' });
   }
 }
+
+export async function obtenerConsumoHoy(req, res) {
+  try {
+    const result = await dashboardService.obtenerConsumoHoy();
+    res.json(result);
+  } catch (error) {
+    console.error('Error al obtener consumo de hoy:', error);
+    res.status(500).json({ error: 'Error al obtener consumo de hoy' });
+  }
+}

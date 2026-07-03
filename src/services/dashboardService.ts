@@ -62,3 +62,13 @@ export async function obtenerEficiencia() {
     porcentaje: total > 0 ? Math.round((parseFloat(r.litros) / total) * 100) : 0,
   }));
 }
+
+export async function obtenerConsumoHoy() {
+  const result = await prisma.$queryRaw<any[]>`
+    SELECT COALESCE(SUM(RIHRI_VL), 0) as litros
+    FROM TH_RIHRI
+    WHERE DATE(RIHRI_FI) = CURRENT_DATE
+  `;
+
+  return { litros: result[0]?.litros ? parseFloat(result[0].litros) : 0 };
+}

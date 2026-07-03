@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../db/prismaClient.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, checkRole } from '../middleware/auth.js';
 
 const router = Router();
 router.use(authMiddleware);
@@ -76,7 +76,7 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', checkRole(['Administrador', 'Supervisor']), async (req, res) => {
   try {
     const { id, nombre, ubicacion, ancho, largo, pasillo } = req.body;
     if (!id || !nombre) return res.status(400).json({ error: 'ID y nombre requeridos' });
@@ -94,12 +94,43 @@ router.post('/', async (req, res) => {
         inver_id: id,
         inver_nm: nombre,
         inver_ub: ubicacion || null,
+        inver_est: 'inactivo',
         inver_an: ancho || null,
         inver_la: largo || null,
         inver_pa: pasillo || null
       }
     });
-    
+
+    // Check if we need to generate an alert (it is technically always created or updated without devices here, but we can safely just generate the alert if we wanted to on creation. To be precise, since it's an upsert we don't know if it's new. A simple check for devices would be best.)
+    const dispositivosCount = await prisma.tt_dispo.count({
+      where: {
+        inver_id: id,
+        deletedAt: null,
+        dispo_et: 'Operativo',
+        tm_tipod: { tipod_nm: { in: ['Controlador', 'Microcontrolador'] } }
+      }
+    });
+
+    if (dispositivosCount === 0) {
+      await prisma.tm_inver.update({ where: { inver_id: id }, data: { inver_est: 'inactivo' } });
+      const tipal = await prisma.tm_tipal.findFirst({ where: { tipal_nm: { contains: 'media', mode: 'insensitive' } } });
+      await prisma.tt_alert.create({
+        data: {
+          tipal_id: tipal ? tipal.tipal_id : 1,
+          alert_ti: `Para que el invernadero opere debe tener un microcontrolador en buen estado y asignado.`,
+          alert_ea: 'activa'
+        }
+      });
+    }
+
+    await prisma.th_audit.create({
+      data: {
+        usuar_id: req.user.id,
+        audit_ac: 'Creación/Edición de Invernadero',
+        audit_ds: `Invernadero ${id} (${nombre}) registrado/actualizado`
+      }
+    });
+
     res.status(201).json({ id, nombre });
   } catch (error: any) {
     console.error('Error al crear invernadero:', error.message);
@@ -107,10 +138,24 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', checkRole(['Administrador', 'Supervisor']), async (req, res) => {
   try {
     const { nombre, ubicacion, estado, ancho, largo, pasillo } = req.body;
     
+    if (estado === 'activo') {
+      const dispositivosCount = await prisma.tt_dispo.count({
+        where: {
+          inver_id: req.params.id,
+          deletedAt: null,
+          dispo_et: 'Operativo',
+          tm_tipod: { tipod_nm: { in: ['Controlador', 'Microcontrolador'] } }
+        }
+      });
+      if (dispositivosCount === 0) {
+        return res.status(400).json({ error: 'Para que el invernadero opere debe tener un microcontrolador en buen estado y asignado.' });
+      }
+    }
+
     await prisma.tm_inver.update({
       where: { inver_id: req.params.id },
       data: {
@@ -130,7 +175,7 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', checkRole(['Administrador']), async (req, res) => {
   try {
     const check = await prisma.tm_inver.findUnique({
       where: { inver_id: req.params.id },

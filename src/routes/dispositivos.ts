@@ -1,6 +1,157 @@
 import { Router } from 'express';
 import { prisma } from '../db/prismaClient.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, checkRole } from '../middleware/auth.js';
+
+async function verifyDeviceImpact(dispo: any, isDeleted: boolean, newState?: string) {
+  const isOperative = !isDeleted && newState === 'Operativo';
+  
+  // Register an alert for the device failure/deletion itself
+  if (!isOperative) {
+    try {
+      let tipalId = 1;
+      const tipal = await prisma.tm_tipal.findFirst({ where: { tipal_nm: { contains: 'media', mode: 'insensitive' } } });
+      if (tipal) tipalId = tipal.tipal_id;
+      
+      const actionStr = isDeleted ? 'eliminado' : (newState === 'En Falla' ? 'reportado con falla' : 'puesto en mantenimiento');
+      
+      await prisma.tt_alert.create({
+        data: {
+          dispo_id: dispo.dispo_id,
+          tipal_id: tipalId,
+          alert_ti: `Dispositivo ${dispo.dispo_id} ha sido ${actionStr}.`,
+          alert_ea: 'activa'
+        }
+      });
+    } catch (e) {
+      console.error("Error creating device alert:", e);
+    }
+  }
+
+  // We removed the early return if (isOperative) return null; so that we can evaluate if we need to reactivate a greenhouse.
+
+  const tipod = await prisma.tm_tipod.findUnique({ where: { tipod_id: dispo.tipod_id } });
+  if (!tipod) return null;
+  const tName = tipod.tipod_nm.toLowerCase();
+
+  let warningMsg = null;
+  const reasonStr = isDeleted ? 'ha sido eliminado' : `está en ${newState ? newState.toLowerCase() : 'estado inoperativo'}`;
+
+  if (tName.includes('controlador') || tName.includes('micro')) {
+    if (dispo.inver_id) {
+      const count = await prisma.tt_dispo.count({
+        where: {
+          inver_id: dispo.inver_id,
+          dispo_id: { not: dispo.dispo_id },
+          dispo_et: 'Operativo',
+          deletedAt: null,
+          tipod_id: dispo.tipod_id
+        }
+      });
+      if (count === 0 && !isOperative) {
+        await prisma.tm_inver.update({
+          where: { inver_id: dispo.inver_id },
+          data: { inver_est: 'inactivo' }
+        });
+        warningMsg = `Para que el invernadero opere debe tener un microcontrolador en buen estado y asignado.`;
+      } else if (isOperative) {
+        // If it's operative, make sure the greenhouse is active
+        const prevInver = await prisma.tm_inver.findUnique({
+          where: { inver_id: dispo.inver_id }
+        });
+        
+        if (prevInver && prevInver.inver_est === 'inactivo') {
+          await prisma.tm_inver.update({
+            where: { inver_id: dispo.inver_id },
+            data: { inver_est: 'activo' }
+          });
+          
+          // Find the tipal_id for "info"
+          const tipalInfo = await prisma.tm_tipal.findFirst({
+            where: { tipal_nm: 'info' }
+          });
+          const tipalId = tipalInfo ? tipalInfo.tipal_id : 1;
+          
+          // Generate notification
+          await prisma.tt_alert.create({
+            data: {
+              dispo_id: dispo.dispo_id,
+              tipal_id: tipalId,
+              alert_ti: `El invernadero ${prevInver.inver_nm || prevInver.inver_id} ha sido reactivado exitosamente tras asignar un microcontrolador operativo.`,
+              alert_fd: new Date(),
+              alert_ea: 'activa'
+            }
+          });
+        }
+      }
+    }
+  } else if (tName.includes('valvula') || tName.includes('válvula') || tName.includes('humedad')) {
+    if (dispo.cante_id) {
+      const count = await prisma.tt_dispo.count({
+        where: {
+          cante_id: dispo.cante_id,
+          dispo_id: { not: dispo.dispo_id },
+          dispo_et: 'Operativo',
+          deletedAt: null,
+          tipod_id: dispo.tipod_id
+        }
+      });
+      if (count === 0 && !isOperative) {
+        try {
+          await prisma.tm_cante.update({
+            where: { cante_id: dispo.cante_id },
+            data: { cante_est: false } as any
+          });
+        } catch (e) {
+          console.error("Error inactivando cantero:", e);
+        }
+        warningMsg = `El cantero ${dispo.cante_id} se ha desactivado porque el dispositivo ${dispo.dispo_id} ${reasonStr}. Asigne un reemplazo para que vuelva a estar operativo.`;
+      } else if (isOperative) {
+        try {
+          await prisma.tm_cante.update({
+            where: { cante_id: dispo.cante_id },
+            data: { cante_est: true } as any
+          });
+        } catch (e) {}
+      }
+    }
+  } else if (tName.includes('ambiente') || tName.includes('ambiental')) {
+    if (dispo.inver_id) {
+      const count = await prisma.tt_dispo.count({
+        where: {
+          inver_id: dispo.inver_id,
+          dispo_id: { not: dispo.dispo_id },
+          dispo_et: 'Operativo',
+          deletedAt: null,
+          tipod_id: dispo.tipod_id
+        }
+      });
+      if (count === 0 && !isOperative) {
+        warningMsg = `Advertencia: El sensor ambiental ${dispo.dispo_id} ${reasonStr}. El invernadero se ha quedado sin sensores ambientales operativos.`;
+      }
+    }
+  }
+
+  if (warningMsg) {
+    try {
+      let tipalIdCrit = 1;
+      const tipalCrit = await prisma.tm_tipal.findFirst({ where: { tipal_nm: { contains: 'crítica', mode: 'insensitive' } } });
+      if (tipalCrit) tipalIdCrit = tipalCrit.tipal_id;
+
+      await prisma.tt_alert.create({
+        data: {
+          dispo_id: dispo.dispo_id,
+          tipal_id: tipalIdCrit,
+          alert_ti: warningMsg,
+          alert_ea: 'activa'
+        }
+      });
+    } catch (e) {
+      console.error("Error creating warning alert:", e);
+    }
+  }
+
+  return warningMsg;
+}
 
 const router = Router();
 router.use(authMiddleware);
@@ -65,7 +216,7 @@ router.get('/:id/lecturas', async (req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', checkRole(['Administrador', 'Supervisor']), async (req, res) => {
   try {
     const { tipoId, modelo, canteroId, invernaderoId, estado } = req.body;
     if (!tipoId) return res.status(400).json({ error: 'Tipo requerido' });
@@ -95,7 +246,7 @@ router.post('/', async (req, res) => {
 
     const newId = `${invId}-${prefix}${count + 1}`;
 
-    await prisma.tt_dispo.create({
+    const createdDispo = await prisma.tt_dispo.create({
       data: {
         dispo_id: newId,
         dispo_tg: modelo || null,
@@ -105,7 +256,17 @@ router.post('/', async (req, res) => {
         dispo_et: estado || 'Operativo'
       }
     });
-    
+
+    const warning = await verifyDeviceImpact(createdDispo, false, createdDispo.dispo_et || undefined);
+
+    await prisma.th_audit.create({
+      data: {
+        usuar_id: req.user.id,
+        audit_ac: 'Alta de Hardware',
+        audit_ds: `Dispositivo ${newId} (Modelo: ${modelo || 'N/A'}) registrado y asignado. Cantero: ${canteroId || 'Ninguno'}`
+      }
+    });
+
     res.status(201).json({ id: newId });
   } catch (error: any) {
     console.error('Error al crear dispositivo:', error.message);
@@ -113,11 +274,11 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', checkRole(['Administrador', 'Supervisor']), async (req, res) => {
   try {
     const { tipoId, modelo, canteroId, estado, invernaderoId } = req.body;
     
-    await prisma.tt_dispo.update({
+    const dispo = await prisma.tt_dispo.update({
       where: { dispo_id: req.params.id },
       data: {
         tipod_id: tipoId !== undefined ? tipoId : undefined,
@@ -128,14 +289,16 @@ router.put('/:id', async (req, res) => {
       }
     });
     
-    res.json({ message: 'Dispositivo actualizado' });
+    const warning = await verifyDeviceImpact(dispo, false, dispo.dispo_et || undefined);
+    
+    res.json({ message: 'Dispositivo actualizado', warning });
   } catch (error: any) {
     console.error('Error al actualizar dispositivo:', error.message);
     res.status(500).json({ error: 'Error al actualizar dispositivo' });
   }
 });
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', checkRole(['Administrador']), async (req, res) => {
   try {
     // Verificación de dependencias de seguridad (programas activos)
     const dispo = await prisma.tt_dispo.findUnique({
@@ -147,11 +310,22 @@ router.delete('/:id', async (req, res) => {
       return res.status(403).json({ error: 'Operación denegada. Este dispositivo está asignado a un cantero con programas de riego activos. Por favor, detenga o reasigne los programas primero.' });
     }
 
-    await prisma.tt_dispo.update({
+    const dispoDeleted = await prisma.tt_dispo.update({
       where: { dispo_id: req.params.id },
       data: { deletedAt: new Date() }
     });
-    res.json({ success: true });
+
+    await prisma.th_audit.create({
+      data: {
+        usuar_id: req.user.id,
+        audit_ac: 'Baja de Hardware',
+        audit_ds: `Dispositivo ${req.params.id} dado de baja (eliminación lógica)`
+      }
+    });
+
+    const warning = await verifyDeviceImpact(dispoDeleted, true);
+
+    res.json({ success: true, warning });
   } catch (error: any) {
     if (error.code === 'P2025') {
        return res.json({ success: true }); // already deleted

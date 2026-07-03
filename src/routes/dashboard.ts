@@ -8,5 +8,6 @@ router.use(authMiddleware);
 router.get('/dashboard/tendencia-anual', dashboardController.obtenerTendenciaAnual);
 router.get('/dashboard/tendencia-mensual', dashboardController.obtenerTendenciaMensual);
 router.get('/dashboard/eficiencia', dashboardController.obtenerEficiencia);
+router.get('/dashboard/consumo-hoy', dashboardController.obtenerConsumoHoy);
 
 export default router;
