@@ -25,6 +25,8 @@ export class CanterosController {
   static async createCantero(req: Request, res: Response) {
     try {
       if (!req.body.id || !req.body.nombre) return res.status(400).json({ error: 'ID y nombre requeridos' });
+      // invernaderoId es OBLIGATORIO: todo cantero debe pertenecer a un invernadero
+      if (!req.body.invernaderoId) return res.status(400).json({ error: 'invernaderoId es requerido' });
       const result = await CanterosService.upsertCantero(req.body, req.user?.id || null);
       res.status(201).json({ id: req.body.id, nombre: req.body.nombre });
     } catch (error) {
