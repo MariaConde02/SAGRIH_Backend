@@ -59,6 +59,7 @@ model tm_cante {
   tm_inver  tm_inver?  @relation(fields: [inver_id], references: [inver_id], onDelete: Cascade, onUpdate: NoAction)
   tt_dispo  tt_dispo[]
   tt_progr  tt_progr[]
+  th_suelo  th_suelo[]
 }
 
 model tm_categ {
@@ -92,6 +93,8 @@ model tm_inver {
   deletedAt DateTime?
   tm_cante  tm_cante[]
   tt_dispo  tt_dispo[]
+  tt_estop  tt_estop[]
+  th_clima  th_clima[]
 }
 
 model tm_permi {
@@ -183,6 +186,9 @@ model tt_dispo {
   dispo_et  String?    @default("Operativo") @db.VarChar(20)
   dispo_sm  Boolean?   @default(false)
   dispo_fc  DateTime?  @default(now()) @db.Timestamp(6)
+  // Trazabilidad administrativa - Fase 1 (opcionales: no rompen registros existentes)
+  dispo_mk  String?    @db.VarChar(50)
+  dispo_md  String?    @db.VarChar(50)
   deletedAt DateTime?
   th_mante  th_mante[]
   tt_manpr  tt_manpr[]
@@ -271,7 +277,10 @@ model tt_estop {
   usuar_id Int?
   estop_mo String    @db.Text
   estop_av Boolean?  @default(true)
+  // Alcance de la parada: NULL = global (registros históricos), valor = invernadero
+  inver_id String?   @db.VarChar(20)
   tm_usuar tm_usuar? @relation(fields: [usuar_id], references: [usuar_id], onDelete: NoAction, onUpdate: NoAction)
+  tm_inver tm_inver? @relation(fields: [inver_id], references: [inver_id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model tt_simet {
@@ -294,4 +303,26 @@ model tt_manpr {
   
   tm_usuar  tm_usuar? @relation(fields: [usuar_id], references: [usuar_id], onDelete: NoAction, onUpdate: NoAction)
   tt_dispo  tt_dispo? @relation(fields: [dispo_id], references: [dispo_id], onUpdate: NoAction)
+}
+
+model th_clima {
+  clima_id Int       @id @default(autoincrement())
+  inver_id String    @db.VarChar(20)
+  clima_fe DateTime  @db.Timestamp(6)
+  clima_te Float?
+  clima_hr Float?
+  clima_lz Float?
+  tm_inver tm_inver  @relation(fields: [inver_id], references: [inver_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([inver_id, clima_fe(sort: Desc)], map: "idx_clima_inver_fe")
+}
+
+model th_suelo {
+  suelo_id Int       @id @default(autoincrement())
+  cante_id String    @db.VarChar(10)
+  suelo_fe DateTime  @db.Timestamp(6)
+  suelo_hu Float?
+  tm_cante tm_cante  @relation(fields: [cante_id], references: [cante_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([cante_id, suelo_fe(sort: Desc)], map: "idx_suelo_cante_fe")
 }

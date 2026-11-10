@@ -2,27 +2,27 @@ import * as authService from '../services/authService.js';
 
 export async function login(req, res) {
   try {
-    const { email, password } = req.body;
+    const { email, password } = req.body || {};
     const result = await authService.loginUser(email, password);
-    res.json(result);
+    return res.json(result);
   } catch (error) {
     const status = error.statusCode || 500;
     const message = status === 500 ? 'Error interno del servidor' : error.message;
     if (status === 500) console.error('Error en login:', error);
-    res.status(status).json({ error: message });
+    return res.status(status).json({ error: message });
   }
 }
 
 export async function register(req, res) {
   try {
-    const { nombre, apellido, email, password, rolId } = req.body;
+    const { nombre, apellido, email, password, rolId } = req.body || {};
     const result = await authService.registerUser(nombre, apellido, email, password, rolId);
-    res.status(201).json(result);
+    return res.status(201).json(result);
   } catch (error) {
     const status = error.statusCode || 500;
     const message = status === 500 ? 'Error interno del servidor' : error.message;
     if (status === 500) console.error('Error en registro:', error);
-    res.status(status).json({ error: message });
+    return res.status(status).json({ error: message });
   }
 }
 
@@ -54,15 +54,18 @@ export async function changePassword(req, res) {
 
 export async function recoverPassword(req, res) {
   try {
-    const { email } = req.body;
+    const { email } = req.body || {};
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ error: 'Email requerido' });
+    }
     await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 500));
     const result = await authService.recoverPassword(email);
-    res.json(result);
+    return res.json(result);
   } catch (error) {
     await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 500));
     const status = error.statusCode || 500;
     const message = status === 500 ? 'Error interno del servidor' : error.message;
     if (status === 500) console.error('Error en recoverPassword:', error);
-    res.status(status).json({ error: message });
+    return res.status(status).json({ error: message });
   }
 }

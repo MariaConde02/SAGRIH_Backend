@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { authMiddleware, checkRole } from '../middleware/auth.js';
 import { RiegoService } from '../services/riegoService.js';
+import { notificarRolesTelegram, notificarRestablecimiento } from '../services/telegramService.js';
+import { prisma } from '../db/prismaClient.js';
 
 const router = Router();
 router.use(authMiddleware);
@@ -17,10 +19,99 @@ router.get('/estadisticas', async (req, res) => {
 router.post('/emergencia', checkRole(['Administrador', 'Supervisor']), async (req, res) => {
   try {
     const userId = (req as any).user.id;
-    const data = await RiegoService.ejecutarEmergencia(userId);
+
+    // ── Alcance sectorizado (Módulo 5): global | invernadero ─────────────────
+    const { alcance, invernaderoId, nota } = req.body ?? {};
+    if (alcance !== undefined && alcance !== 'global' && alcance !== 'invernadero') {
+      return res.status(400).json({ error: 'Alcance inválido: use "global" o "invernadero"' });
+    }
+    if (alcance === 'invernadero' && !invernaderoId) {
+      return res.status(400).json({ error: 'invernaderoId es requerido cuando el alcance es "invernadero"' });
+    }
+
+    const data = await RiegoService.ejecutarEmergencia(userId, {
+      invernaderoId: alcance === 'invernadero' ? String(invernaderoId) : null,
+      nota: nota ? String(nota) : null,
+    });
+
+    // ── Push inmediato a Administradores e Ingenieros (Gestión por Excepción) ──
+    const quien = (req as any).user?.nombre ?? (req as any).user?.email ?? 'un operario';
+    const sectorizado = data.alcance?.tipo === 'invernadero';
+    notificarRolesTelegram(
+      ['Administrador', 'Ingeniero'],
+      '🛑',
+      sectorizado
+        ? `Parada de Emergencia — Invernadero ${data.alcance?.inverNm}`
+        : 'Parada Global de Emergencia activada',
+      sectorizado
+        ? `Se ha activado la <b>parada de emergencia</b> del <b>invernadero ${data.alcance?.inverNm}</b> por <i>${quien}</i>.\n\n` +
+          `• Solo las válvulas de ese sector han sido <b>cerradas</b>.\n` +
+          `• El riego automático está <b>suspendido en el invernadero</b>.\n` +
+          `• El resto del complejo continúa en <b>modo automático</b>.\n\n` +
+          `Accede al panel para restablecer el sector cuando sea seguro.`
+        : `Se ha activado la <b>parada de emergencia global</b> por <i>${quien}</i>.\n\n` +
+          `• Todas las válvulas han sido <b>cerradas</b>.\n` +
+          `• El suministro eléctrico ha sido <b>cortado</b>.\n` +
+          `• El sistema de riego automático está <b>suspendido</b>.\n\n` +
+          `Accede al panel para restablecer el sistema cuando sea seguro.`,
+    );
+
     res.json(data);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error al registrar emergencia' });
+    const status = error.message?.includes('Invernadero no encontrado') ? 404
+      : error.message?.includes('no está activo') ? 400
+      : 500;
+    res.status(status).json({ error: error.message || 'Error al registrar emergencia' });
+  }
+});
+
+// Estado de la pausa global (TT_ESTOP) — usado por el Dashboard para reflejar la emergencia
+router.get('/emergencia', async (_req, res) => {
+  try {
+    const data = await RiegoService.getEmergenciaActiva();
+    res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Error al consultar el estado de emergencia' });
+  }
+});
+
+// Cerrar la pausa global (TT_ESTOP) y registrar la resolución
+router.post('/emergencia/restablecer', checkRole(['Administrador', 'Supervisor']), async (req, res) => {
+  try {
+    const userId = (req as any).user.id;
+    const { motivo, notas } = req.body;
+    if (!motivo || !String(notas || '').trim()) {
+      return res.status(400).json({ error: 'Motivo y notas de resolución son obligatorios' });
+    }
+
+    // Capturar el registro ANTES de restablecerlo (para leer ESTOP_MO e INVER_ID)
+    const estopActivo = await prisma.tt_estop.findFirst({
+      where: { estop_av: true },
+      orderBy: { estop_id: 'desc' },
+      include: {
+        tm_inver: { select: { inver_nm: true } },
+      },
+    });
+
+    const data = await RiegoService.restablecerEmergencia(userId, String(motivo), String(notas).trim());
+
+    // ── Push de restablecimiento a Administradores e Ingenieros ─────────────
+    // (motivo ORIGINAL de la parada — ESTOP_MO antes de anexar la resolución)
+    if (estopActivo) {
+      const quien = (req as any).user?.nombre ?? (req as any).user?.email ?? 'un operario';
+      const motivoOriginal = estopActivo.estop_mo?.split('|')[0]?.trim() ?? estopActivo.estop_mo;
+
+      notificarRestablecimiento(
+        estopActivo.tm_inver?.inver_nm ?? null,
+        motivoOriginal,
+        { quien, notas: String(notas).trim() },
+      );
+    }
+
+    res.json(data);
+  } catch (error: any) {
+    const status = error.message?.includes('No hay una emergencia') ? 404 : 500;
+    res.status(status).json({ error: error.message || 'Error al restablecer el sistema' });
   }
 });
 

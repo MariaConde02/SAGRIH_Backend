@@ -11,21 +11,39 @@ export async function loginUser(email: string, password: string) {
     throw err;
   }
   
+  // Se busca por email sin filtrar estado para poder distinguir
+  // "credenciales inválidas" de "usuario suspendido" (soft delete USUAR_ES).
   const user = await prisma.tm_usuar.findFirst({
-    where: { usuar_em: email, usuar_est: 'activo' },
+    where: { usuar_em: email },
     include: { tm_roles: true }
   });
-  
+
   if (!user) {
-    const err: any = new Error('Credenciales inválidas o usuario inactivo');
+    const err: any = new Error('Credenciales inválidas');
     err.statusCode = 401;
     throw err;
   }
-  
+
+  // Hash ausente o inválido: se responde 401 sin llegar a bcrypt.compare
+  // (evita la excepción no controlada que derivaba en un 500).
+  if (!user.usuar_pw || typeof user.usuar_pw !== 'string') {
+    const err: any = new Error('Credenciales inválidas');
+    err.statusCode = 401;
+    throw err;
+  }
+
   const validPassword = await bcrypt.compare(password, user.usuar_pw);
   if (!validPassword) {
     const err: any = new Error('Credenciales inválidas');
     err.statusCode = 401;
+    throw err;
+  }
+
+  // Suspensión lógica: solo se rechaza tras validar credenciales,
+  // para no revelar existencia de cuentas inactivas.
+  if (user.usuar_est !== 'activo') {
+    const err: any = new Error('Acceso denegado: El usuario se encuentra suspendido.');
+    err.statusCode = 403;
     throw err;
   }
   
@@ -45,6 +63,7 @@ export async function loginUser(email: string, password: string) {
       email: user.usuar_em,
       rol: user.tm_roles?.roles_nm,
       medioNotificacion: user.usuar_mn,
+      usuarTi: user.usuar_ti,
     },
   };
 }
@@ -111,6 +130,7 @@ export async function getCurrentUser(authorizationHeader: string) {
     email: u.usuar_em,
     rol: u.tm_roles?.roles_nm,
     medioNotificacion: u.usuar_mn,
+    usuarTi: u.usuar_ti,
   };
 }
 

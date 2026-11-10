@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../db/prismaClient.js';
-import { authMiddleware, checkRole } from '../middleware/auth.js';
+import { authMiddleware, checkRole, verificarPermiso } from '../middleware/auth.js';
 
 const router = Router();
 router.use(authMiddleware);
@@ -46,7 +46,7 @@ router.get('/', async (_req, res) => {
   }
 });
 
-router.put('/', checkRole(['Administrador', 'Supervisor']), async (req, res) => {
+router.put('/', checkRole(['Administrador', 'Supervisor']), verificarPermiso('parametros.configurar'), async (req, res) => {
   try {
     const flat: any = {};
     for (const [group, fields] of Object.entries(req.body)) {

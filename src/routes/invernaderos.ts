@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../db/prismaClient.js';
 import { authMiddleware, checkRole } from '../middleware/auth.js';
+import { notificarRolesTelegram } from '../services/telegramService.js';
 
 const router = Router();
 router.use(authMiddleware);
@@ -179,7 +180,7 @@ router.delete('/:id', checkRole(['Administrador']), async (req, res) => {
   try {
     const check = await prisma.tm_inver.findUnique({
       where: { inver_id: req.params.id },
-      select: { inver_ma: true }
+      select: { inver_ma: true, inver_nm: true }
     });
     
     if (!check) return res.status(404).json({ error: 'No encontrado' });
@@ -189,6 +190,18 @@ router.delete('/:id', checkRole(['Administrador']), async (req, res) => {
       where: { inver_id: req.params.id },
       data: { deletedAt: new Date() }
     });
+
+    // ── Push inmediato a Administradores (Gestión por Excepción) ────────────
+    const nombreInver = check.inver_nm ?? req.params.id;
+    const quien = (req as any).user?.nombre ?? (req as any).user?.email ?? 'un administrador';
+    notificarRolesTelegram(
+      ['Administrador'],
+      '🗑️',
+      'Invernadero eliminado',
+      `El invernadero <b>${nombreInver}</b> (<code>${req.params.id}</code>) ha sido eliminado por <i>${quien}</i>.\n` +
+      `Todos sus canteros y dispositivos asociados han quedado sin estructura padre.`,
+    );
+
     res.json({ success: true });
   } catch (error: any) {
     console.error('Error al eliminar invernadero:', error.message);

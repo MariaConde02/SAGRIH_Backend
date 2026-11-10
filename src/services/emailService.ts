@@ -76,3 +76,5 @@ export class EmailService {
     }
   }
 }
+
+export { enviarCorreoHTML, generarPlantillaCierreDiario } from './email.service.js';

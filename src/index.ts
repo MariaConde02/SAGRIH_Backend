@@ -23,8 +23,10 @@ import cultivosRoutes from './routes/cultivos.js';
 import simuladorRoutes from './routes/simulador.js';
 import auditoriaRoutes from './routes/auditoria.js';
 import papeleraRoutes from './routes/papelera.js';
+import reportesRoutes from './routes/reportes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { startCronJobs } from './services/cron.js';
+import { diagnosticarEntornoTelegram, escucharMensajesTelegram } from './services/telegramService.js';
 
 // ─── Variables de entorno ────────────────────────────────────────────────────
 dotenv.config();
@@ -39,28 +41,36 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
+// Soporta desarrollo local (puertos 5173-5199, 4173), despliegues en Vercel (*.vercel.app)
+// y orígenes adicionales configurados por variable de entorno CORS_ORIGIN.
 const corsOrigins = [
-  'http://localhost:5173',   // Vite dev (puerto por defecto)
-  'http://localhost:5174',   // Vite dev (puerto alternativo, cuando 5173 está ocupado)
-  'http://localhost:4173',   // Vite preview
-  'http://127.0.0.1:5173',
-  'http://127.0.0.1:5174',
-  'http://127.0.0.1:4173',
-  'https://sagrih-frontend.vercel.app', // Producción Vercel
+  'https://sagrih-frontend.vercel.app', // Producción Vercel principal
 ];
 if (process.env.CORS_ORIGIN) {
-  corsOrigins.push(process.env.CORS_ORIGIN);
+  process.env.CORS_ORIGIN.split(',').forEach((orig) => {
+    const trimmed = orig.trim();
+    if (trimmed && !corsOrigins.includes(trimmed)) corsOrigins.push(trimmed);
+  });
 }
+
+const esOrigenDev = (origin: string) =>
+  /^https?:\/\/(localhost|127\.0\.0\.1):(517\d|4173)$/.test(origin);
+
+const esOrigenVercel = (origin: string) =>
+  /^https:\/\/[a-zA-Z0-9_-]+\.vercel\.app$/.test(origin);
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(helmet());
 app.use(cors({
   origin: (origin, callback) => {
-    // Permitir peticiones sin origen (ej. Postman, curl) o que estén en la lista
-    if (!origin || corsOrigins.includes(origin)) {
+    // Permitir peticiones sin origen (ej. Postman, curl, health checks) o permitidos
+    if (!origin || corsOrigins.includes(origin) || esOrigenDev(origin) || esOrigenVercel(origin)) {
       callback(null, true);
     } else {
-      callback(new Error(`CORS: origen no permitido → ${origin}`));
+      // No lanzar Error: responder sin cabeceras CORS para que el navegador
+      // rechace la petición limpiamente sin tumbar el pipeline de Express.
+      console.warn(`[CORS] Origen no permitido: ${origin}`);
+      callback(null, false);
     }
   },
   credentials: true,
@@ -91,10 +101,13 @@ app.use('/api', dashboardRoutes);
 app.use('/api/setup', setupRoutes);
 app.use('/api/auditoria', auditoriaRoutes);
 app.use('/api/papelera', papeleraRoutes);
+app.use('/api/reportes', reportesRoutes);
 
 app.use(errorHandler);
 
 // ─── Cron Jobs ────────────────────────────────────────────────────────────────
+diagnosticarEntornoTelegram();
+escucharMensajesTelegram();   // Long Polling bidireccional (Módulo 6 · Onboarding)
 startCronJobs();
 
 // ─── Arrancar ─────────────────────────────────────────────────────────────────

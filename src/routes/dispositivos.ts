@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../db/prismaClient.js';
 import { authMiddleware, checkRole } from '../middleware/auth.js';
+import { notificarRolesTelegram } from '../services/telegramService.js';
 
 async function verifyDeviceImpact(dispo: any, isDeleted: boolean, newState?: string) {
   const isOperative = !isDeleted && newState === 'Operativo';
@@ -191,6 +192,102 @@ router.get('/tipos', async (_req, res) => {
   } catch (error: any) {
     console.error('Error al listar tipos:', error.message);
     res.status(500).json({ error: 'Error al listar tipos' });
+  }
+});
+
+// ─── Actuadores (Ventilador / Luces) — estado y override manual ──────────────
+const ACTUADORES: Record<string, { dispoId: string; prefijo: 'VENT' | 'LUZ' }> = {
+  'VENT-01': { dispoId: 'INV-01-VENT', prefijo: 'VENT' },
+  'LUZ-01': { dispoId: 'INV-01-LUZ', prefijo: 'LUZ' },
+};
+
+async function estadoActuador(prefijo: 'VENT' | 'LUZ', dispoId: string) {
+  const claves = [`${prefijo}_MODO`, `${prefijo}_ESTADO`, `${prefijo}_TEMP_ON`, `${prefijo}_TEMP_OFF`];
+  const [dispo, filas] = await Promise.all([
+    prisma.tt_dispo.findUnique({ where: { dispo_id: dispoId } }),
+    prisma.tp_param.findMany({ where: { param_cl: { in: claves } } }),
+  ]);
+  const mapa = Object.fromEntries(filas.map(r => [r.param_cl, r.param_vl]));
+  return {
+    id: dispoId,
+    tag: dispo?.dispo_tg ?? null,
+    modo: (mapa[`${prefijo}_MODO`] || 'auto').toLowerCase(),
+    estado: (mapa[`${prefijo}_ESTADO`] || 'off').toLowerCase() === 'on',
+    umbralEncendido: parseFloat(mapa[`${prefijo}_TEMP_ON`] || '0') || 0,
+    umbralApagado: parseFloat(mapa[`${prefijo}_TEMP_OFF`] || '0') || 0,
+    operativo: !!dispo && dispo.dispo_et === 'Operativo' && !dispo.deletedAt,
+  };
+}
+
+router.get('/actuadores', async (_req, res) => {
+  try {
+    const [ventilador, luz] = await Promise.all([
+      estadoActuador('VENT', 'INV-01-VENT'),
+      estadoActuador('LUZ', 'INV-01-LUZ'),
+    ]);
+    res.json({ ventilador, luz });
+  } catch (error: any) {
+    console.error('Error al leer actuadores:', error.message);
+    res.status(500).json({ error: 'Error al leer actuadores' });
+  }
+});
+
+router.post('/actuadores/:tag/estado', checkRole(['Administrador', 'Supervisor']), async (req, res) => {
+  try {
+    const { modo, estado } = req.body;
+    const tag = String(req.params.tag || '').toUpperCase();
+    const def = ACTUADORES[tag];
+    if (!def) return res.status(404).json({ error: 'Actuador no encontrado' });
+    if (modo !== 'auto' && modo !== 'manual') {
+      return res.status(400).json({ error: "modo debe ser 'auto' o 'manual'" });
+    }
+    if (modo === 'manual' && typeof estado !== 'boolean') {
+      return res.status(400).json({ error: 'estado (boolean) requerido en modo manual' });
+    }
+
+    const pref = def.prefijo;
+    const ahora = new Date();
+    await prisma.$transaction([
+      prisma.tp_param.upsert({
+        where: { param_cl: `${pref}_MODO` },
+        update: { param_vl: modo, param_um: ahora },
+        create: { param_cl: `${pref}_MODO`, param_vl: modo, param_ds: `Modo de control ${tag} (auto|manual)` },
+      }),
+      ...(modo === 'manual'
+        ? [prisma.tp_param.upsert({
+            where: { param_cl: `${pref}_ESTADO` },
+            update: { param_vl: estado ? 'on' : 'off', param_um: ahora },
+            create: { param_cl: `${pref}_ESTADO`, param_vl: estado ? 'on' : 'off', param_ds: `Estado actual ${tag} (on|off)` },
+          })]
+        : []),
+    ]);
+
+    await prisma.th_audit.create({
+      data: {
+        usuar_id: (req as any).user.id,
+        audit_ac: 'Control de Actuador',
+        audit_ds: `${tag} → modo ${modo}${modo === 'manual' ? ` (${estado ? 'ENCENDIDO' : 'APAGADO'})` : ' (control automático reanudado)'}`,
+      },
+    });
+
+    // ── Push inmediato cuando se abandona el modo automático (Gestión por Excepción) ──
+    if (modo === 'manual') {
+      const quien = (req as any).user?.nombre ?? (req as any).user?.email ?? 'un operario';
+      const estadoStr = estado ? '🟢 ENCENDIDO' : '🔴 APAGADO';
+      notificarRolesTelegram(
+        ['Administrador', 'Ingeniero'],
+        '⚠️',
+        `Modo manual activado en ${tag}`,
+        `El actuador <b>${tag}</b> ha sido puesto en <b>modo manual</b> por <i>${quien}</i>.\n` +
+        `Estado forzado: <b>${estadoStr}</b>.\n\n` +
+        `El control automático está <b>suspendido</b> hasta que se restablezca el modo auto.`,
+      );
+    }
+
+    res.json(await estadoActuador(pref, def.dispoId));
+  } catch (error: any) {
+    console.error('Error al cambiar estado del actuador:', error.message);
+    res.status(500).json({ error: 'Error al cambiar estado del actuador' });
   }
 });
 

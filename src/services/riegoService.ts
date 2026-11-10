@@ -56,24 +56,57 @@ export class RiegoService {
     }
   }
 
-  static async ejecutarEmergencia(userId: number) {
+  static async ejecutarEmergencia(userId: number, opts?: { invernaderoId?: string | null; nota?: string | null }) {
     try {
+      const inverId = opts?.invernaderoId?.trim() || null;
+      const nota = opts?.nota?.trim() || null;
+
+      // ── Alcance sectorizado: validar invernadero y recoger sus canteros ─────
+      let inverNm: string | null = null;
+      let canteIds: string[] = [];
+      if (inverId) {
+        const inver = await prisma.tm_inver.findFirst({
+          where: { inver_id: inverId, deletedAt: null },
+        });
+        if (!inver) throw new Error('Invernadero no encontrado');
+        if (inver.inver_est && inver.inver_est !== 'activo') throw new Error('El invernadero no está activo');
+        inverNm = inver.inver_nm;
+        const canteros = await prisma.tm_cante.findMany({
+          where: { inver_id: inverId, deletedAt: null },
+          select: { cante_id: true },
+        });
+        canteIds = canteros.map((c) => c.cante_id);
+      }
+
       const tipoAlerta = await prisma.tm_tipal.findFirst({ where: { tipal_nm: 'crítica' } });
-      
+
+      // Filtros de alcance: global = todo; sectorizado = invernadero por
+      // tt_dispo.inver_id o por pertenencia de su cantero al invernadero.
+      const dondeValvulas = inverId
+        ? { OR: [{ inver_id: inverId }, { cante_id: { in: canteIds } }] }
+        : {};
+      const dondeRiegos = inverId ? { cante_id: { in: canteIds } } : {};
+
       const operaciones: any[] = [
         prisma.th_rihri.updateMany({
-          where: { rihri_ff: null },
+          where: { rihri_ff: null, ...dondeRiegos },
           data: { rihri_ff: new Date(), rihri_ta: 'Emergencia' }
         }),
         prisma.tt_dispo.updateMany({
-          where: { tm_tipod: { tipod_nm: 'Válvula' }, dispo_et: 'Abierta' },
+          where: {
+            tm_tipod: { tipod_nm: 'Válvula' },
+            dispo_et: 'Abierta',
+            ...(inverId ? { OR: [{ inver_id: inverId }, { cante_id: { in: canteIds } }] } : {}),
+          },
           data: { dispo_et: 'Cerrada' }
         }),
         prisma.th_audit.create({
           data: {
             usuar_id: userId,
             audit_ac: 'Parada de Emergencia',
-            audit_ds: 'Se ha activado la parada de emergencia. El suministro eléctrico ha sido cortado y todas las válvulas se encuentran cerradas por seguridad.',
+            audit_ds: inverId
+              ? `Se ha activado la parada de emergencia sectorizada al invernadero ${inverNm}. Sus válvulas han sido cerradas y el riego automático queda suspendido en ese sector.`
+              : 'Se ha activado la parada de emergencia. El suministro eléctrico ha sido cortado y todas las válvulas se encuentran cerradas por seguridad.',
           }
         })
       ];
@@ -83,18 +116,120 @@ export class RiegoService {
           prisma.tt_alert.create({
             data: {
               tipal_id: tipoAlerta.tipal_id,
-              alert_ti: 'Parada de Emergencia Activada',
+              alert_ti: inverId
+                ? `Parada de Emergencia Activada — Invernadero ${inverNm}`
+                : 'Parada de Emergencia Activada',
               alert_ea: 'activa',
             }
           })
         );
       }
 
+      // TT_ESTOP: registrar la pausa para que el Simulador IoT la respete.
+      // Global: cualquier pausa activa ya bloquea. Sectorizada: solo la pausa
+      // global o la del MISMO invernadero (otros sectores siguen operando).
+      const dondePausa = inverId
+        ? { OR: [{ inver_id: null }, { inver_id: inverId }] }
+        : {};
+      const pausaYaActiva = await prisma.tt_estop.findFirst({
+        where: { estop_av: true, estop_fn: { gt: new Date() }, ...dondePausa }
+      });
+      if (!pausaYaActiva) {
+        operaciones.push(
+          prisma.tt_estop.create({
+            data: {
+              estop_tp: inverId ? 'Emergencia Invernadero' : 'Emergencia Global',
+              // Ventana de seguridad: si el panel nunca restablece, el simulador reanuda solo
+              estop_fn: new Date(Date.now() + 24 * 60 * 60 * 1000),
+              estop_mo: nota
+                ?? (inverId
+                  ? `Parada de emergencia sectorizada al invernadero ${inverNm} desde el panel de control.`
+                  : 'Parada de emergencia activada desde el panel de control.'),
+              usuar_id: userId,
+              estop_av: true,
+              inver_id: inverId,
+            }
+          })
+        );
+      }
+
       await prisma.$transaction(operaciones);
-      return { success: true, message: 'Parada de emergencia registrada correctamente en BBDD' };
+      return {
+        success: true,
+        message: inverId
+          ? `Parada de emergencia del invernadero ${inverNm} registrada correctamente en BBDD`
+          : 'Parada de emergencia registrada correctamente en BBDD',
+        alcance: { tipo: inverId ? 'invernadero' : 'global', inverId, inverNm },
+      };
     } catch (error: any) {
+      if (error.message?.includes('Invernadero no encontrado') || error.message?.includes('no está activo')) throw error;
       console.error('Service Error - ejecutarEmergencia:', error);
       throw new Error('Error al registrar emergencia');
+    }
+  }
+
+  static async getEmergenciaActiva() {
+    try {
+      const activa = await prisma.tt_estop.findFirst({
+        where: { estop_av: true, estop_fn: { gt: new Date() } },
+        orderBy: { estop_id: 'desc' },
+        include: {
+          tm_usuar: { select: { usuar_nm: true, usuar_ap: true } },
+          tm_inver: { select: { inver_nm: true } },
+        }
+      });
+
+      if (!activa) return { activa: false };
+
+      return {
+        activa: true,
+        desde: activa.estop_in,
+        motivo: activa.estop_mo,
+        usuario: activa.tm_usuar
+          ? `${activa.tm_usuar.usuar_nm} ${activa.tm_usuar.usuar_ap || ''}`.trim()
+          : null,
+        // Alcance de la parada: NULL en inver_id = global (históricos)
+        alcance: activa.tm_inver
+          ? { tipo: 'invernadero' as const, nombre: activa.tm_inver.inver_nm }
+          : { tipo: 'global' as const, nombre: null },
+      };
+    } catch (error: any) {
+      console.error('Service Error - getEmergenciaActiva:', error);
+      throw new Error('Error al consultar el estado de emergencia');
+    }
+  }
+
+  static async restablecerEmergencia(userId: number, motivo: string, notas: string) {
+    try {
+      // Incluye también estop vencidos cuyo estop_av quedó en true (ventana expirada)
+      const activa = await prisma.tt_estop.findFirst({
+        where: { estop_av: true },
+        orderBy: { estop_id: 'desc' }
+      });
+
+      if (!activa) throw new Error('No hay una emergencia activa para restablecer');
+
+      const motivoResolucion = `${activa.estop_mo} | Resuelta (${motivo}): ${notas}`;
+
+      await prisma.$transaction([
+        prisma.tt_estop.update({
+          where: { estop_id: activa.estop_id },
+          data: { estop_av: false, estop_fn: new Date(), estop_mo: motivoResolucion }
+        }),
+        prisma.th_audit.create({
+          data: {
+            usuar_id: userId,
+            audit_ac: 'Restablecer Emergencia',
+            audit_ds: `Sistema restablecido. Motivo de la emergencia: ${motivo}. Resolución: ${notas}`,
+          }
+        }),
+      ]);
+
+      return { success: true, message: 'Sistema restablecido correctamente' };
+    } catch (error: any) {
+      if (error.message?.includes('No hay una emergencia')) throw error;
+      console.error('Service Error - restablecerEmergencia:', error);
+      throw new Error('Error al restablecer el sistema');
     }
   }
 

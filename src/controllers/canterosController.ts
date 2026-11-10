@@ -22,6 +22,19 @@ export class CanterosController {
     }
   }
 
+  static async getCanteroDashboard(req: Request, res: Response) {
+    try {
+      const data = await CanterosService.getCanteroDashboard(req.params.id as string);
+      res.json(data);
+    } catch (error: any) {
+      if (error.message?.includes('no encontrado')) {
+        return res.status(404).json({ error: error.message });
+      }
+      console.error('Error al obtener dashboard del cantero:', error.message);
+      res.status(500).json({ error: 'Error al obtener dashboard del cantero' });
+    }
+  }
+
   static async createCantero(req: Request, res: Response) {
     try {
       if (!req.body.id || !req.body.nombre) return res.status(400).json({ error: 'ID y nombre requeridos' });
@@ -37,7 +50,7 @@ export class CanterosController {
 
   static async updateCantero(req: Request, res: Response) {
     try {
-      await CanterosService.updateCantero(req.params.id, req.body, req.user?.id || null);
+      await CanterosService.updateCantero(req.params.id as string, req.body, req.user?.id || null);
       res.json({ message: 'Cantero actualizado' });
     } catch (error: any) {
       console.error('Error al actualizar cantero:', error.message);
@@ -47,7 +60,7 @@ export class CanterosController {
 
   static async deleteCantero(req: Request, res: Response) {
     try {
-      await CanterosService.deleteCantero(req.params.id);
+      await CanterosService.deleteCantero(req.params.id as string);
       res.json({ success: true });
     } catch (error: any) {
       if (error.code === 'P2025') {

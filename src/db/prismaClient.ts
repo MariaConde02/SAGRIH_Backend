@@ -12,4 +12,13 @@ const globalForPrisma = globalThis as unknown as {
 
 export const prisma = globalForPrisma.prisma ?? new PrismaClient({} as any)
 
+Object.defineProperties(prisma, {
+  TH_CLIMA: { get() { return (this as any).th_clima; } },
+  TH_SUELO: { get() { return (this as any).th_suelo; } },
+  tT_LECTU: { get() { return (this as any).tt_lectu; } },
+  TT_LECTU: { get() { return (this as any).tt_lectu; } },
+  tT_LOGCO: { get() { return (this as any).tt_logco; } },
+  TT_LOGCO: { get() { return (this as any).tt_logco; } },
+});
+
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
