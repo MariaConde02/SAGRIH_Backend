@@ -49,9 +49,31 @@ export function generateToken(user: any) {
  * después del login).
  */
 export function verificarSesion(req: any, res: any, next: any) {
+  // ── Soporte para dispositivos IoT / ESP32 mediante encabezado x-api-key ─────
+  const apiKey = req.headers['x-api-key'];
+  const expectedApiKey = process.env.IOT_API_KEY || 'sagrih-iot-key-2026';
+
+  if (apiKey && apiKey === expectedApiKey) {
+    req.user = {
+      id: 0,
+      nombre: 'ESP32 Device',
+      apellido: 'IoT',
+      email: 'esp32@sagrih.local',
+      rolId: 1,
+      rolNombre: 'Administrador',
+      usuario: {
+        usuar_id: 0,
+        roles_id: 1,
+        usuar_nm: 'ESP32 Device',
+        usuar_est: 'activo',
+      },
+    };
+    return next();
+  }
+
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Acceso denegado. Token no proporcionado.' });
+    return res.status(401).json({ error: 'Acceso denegado. Token no proporcionado o API Key inválida.' });
   }
   const token = header.split(' ')[1];
   let decodificado: any;
@@ -128,6 +150,9 @@ export function verificarPermiso(permisoNm: string) {
   return async (req: any, res: any, next: any) => {
     const user = req.user;
     if (!user) return res.status(401).json({ error: 'Autenticación requerida' });
+    if (user.rolNombre === 'Administrador' || user.id === 0) {
+      return next();
+    }
     try {
       const rolesId = user.usuario?.roles_id ?? user.rolId;
       const existePermiso = await prisma.tt_rolpe.findFirst({
