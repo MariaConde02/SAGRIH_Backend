@@ -222,4 +222,151 @@ router.get('/metricas', async (req, res) => {
   }
 });
 
+// ─── Órdenes activas para ESP32 (Riego manual, Bomba, Emergencia, Actuadores) ─
+router.get('/ordenes', async (req, res) => {
+  try {
+    const { invernaderoId } = req.query;
+    const ahora = new Date();
+
+    // 1. Emergencia activa
+    const estop = await prisma.tt_estop.findFirst({
+      where: { estop_av: true, estop_fn: { gt: ahora } },
+      orderBy: { estop_id: 'desc' },
+      select: { estop_tp: true, inver_id: true }
+    });
+    const emergencia = !!estop;
+
+    // 2. Estado de la Bomba principal
+    const bombaParam = await prisma.tp_param.findUnique({
+      where: { param_cl: 'BOMBA_ACTIVA' }
+    });
+    const bomba = bombaParam ? bombaParam.param_vl === 'true' : false;
+
+    // 3. Riegos activos (Manuales o Automáticos) en TH_RIHRI
+    const riegosActivos = await prisma.th_rihri.findMany({
+      where: {
+        rihri_ff: { gt: ahora },
+        ...(invernaderoId ? { tm_cante: { inver_id: String(invernaderoId) } } : {})
+      },
+      include: { tm_cante: { select: { cante_nm: true, inver_id: true } } },
+      orderBy: { rihri_fi: 'desc' }
+    });
+
+    const riegos = riegosActivos.map(r => ({
+      canteroId: r.cante_id,
+      tipo: r.rihri_ta,
+      inicio: r.rihri_fi,
+      fin: r.rihri_ff,
+      segundosRestantes: r.rihri_ff ? Math.max(0, Math.round((r.rihri_ff.getTime() - ahora.getTime()) / 1000)) : 0
+    }));
+
+    // 4. Parámetros de actuadores (Ventilador y Luces)
+    const clavesAct = ['VENT_MODO', 'VENT_ESTADO', 'VENT_TEMP_ON', 'VENT_TEMP_OFF', 'LUZ_MODO', 'LUZ_ESTADO', 'LUZ_TEMP_ON', 'LUZ_TEMP_OFF'];
+    const paramsAct = await prisma.tp_param.findMany({ where: { param_cl: { in: clavesAct } } });
+    const mapaAct = Object.fromEntries(paramsAct.map(p => [p.param_cl, p.param_vl]));
+
+    res.json({
+      emergencia,
+      bomba,
+      riegosActivos: riegos,
+      actuadores: {
+        ventilador: {
+          modo: (mapaAct['VENT_MODO'] || 'auto').toLowerCase(),
+          estado: (mapaAct['VENT_ESTADO'] || 'off').toLowerCase() === 'on',
+          tempOn: parseFloat(mapaAct['VENT_TEMP_ON'] || '28'),
+          tempOff: parseFloat(mapaAct['VENT_TEMP_OFF'] || '26')
+        },
+        luz: {
+          modo: (mapaAct['LUZ_MODO'] || 'auto').toLowerCase(),
+          estado: (mapaAct['LUZ_ESTADO'] || 'off').toLowerCase() === 'on',
+          tempOn: parseFloat(mapaAct['LUZ_TEMP_ON'] || '18'),
+          tempOff: parseFloat(mapaAct['LUZ_TEMP_OFF'] || '20')
+        }
+      }
+    });
+  } catch (error: any) {
+    console.error('Error al obtener órdenes para ESP32:', error);
+    res.status(500).json({ error: 'Error al obtener órdenes para el controlador' });
+  }
+});
+
+// ─── Feedback de Actuadores desde ESP32 (Válvulas, Bomba, Ventilador, Luces) ──
+router.post('/estado', async (req, res) => {
+  try {
+    const { bomba, valvulas, actuadores } = req.body;
+    const ahora = new Date();
+
+    // 1. Feedback de Bomba
+    if (typeof bomba === 'boolean') {
+      await prisma.tp_param.upsert({
+        where: { param_cl: 'BOMBA_ACTIVA' },
+        update: { param_vl: String(bomba), param_um: ahora },
+        create: { param_cl: 'BOMBA_ACTIVA', param_vl: String(bomba), param_ds: 'Estado de la bomba principal', param_um: ahora }
+      });
+    }
+
+    // 2. Feedback de Electroválvulas por Cantero
+    if (Array.isArray(valvulas)) {
+      for (const v of valvulas) {
+        if (!v.canteroId) continue;
+        const estaAbierta = typeof v.abierta === 'boolean' ? v.abierta : (v.estado === 'Abierta' || v.estado === 'abierta');
+        const estadoDb = estaAbierta ? 'Abierta' : 'Operativo';
+
+        await prisma.tt_dispo.updateMany({
+          where: {
+            cante_id: v.canteroId,
+            tm_tipod: { tipod_nm: 'Válvula' }
+          },
+          data: { dispo_et: estadoDb }
+        });
+
+        if (!estaAbierta) {
+          await prisma.th_rihri.updateMany({
+            where: {
+              cante_id: v.canteroId,
+              rihri_ff: { gt: ahora }
+            },
+            data: { rihri_ff: ahora }
+          });
+        }
+      }
+    }
+
+    // 3. Feedback de Actuadores (Ventilador, Luces)
+    if (Array.isArray(actuadores)) {
+      for (const a of actuadores) {
+        const tag = String(a.tag || '').toUpperCase();
+        const pref = tag.includes('VENT') ? 'VENT' : tag.includes('LUZ') ? 'LUZ' : null;
+        if (!pref) continue;
+
+        const estadoOn = typeof a.estado === 'boolean' ? a.estado : (a.estado === 'on' || a.estado === 'ON');
+        const updates: any[] = [
+          prisma.tp_param.upsert({
+            where: { param_cl: `${pref}_ESTADO` },
+            update: { param_vl: estadoOn ? 'on' : 'off', param_um: ahora },
+            create: { param_cl: `${pref}_ESTADO`, param_vl: estadoOn ? 'on' : 'off', param_ds: `Estado actual ${tag}`, param_um: ahora }
+          })
+        ];
+
+        if (a.modo === 'auto' || a.modo === 'manual') {
+          updates.push(
+            prisma.tp_param.upsert({
+              where: { param_cl: `${pref}_MODO` },
+              update: { param_vl: a.modo.toLowerCase(), param_um: ahora },
+              create: { param_cl: `${pref}_MODO`, param_vl: a.modo.toLowerCase(), param_ds: `Modo de control ${tag}`, param_um: ahora }
+            })
+          );
+        }
+
+        await prisma.$transaction(updates);
+      }
+    }
+
+    res.json({ success: true, message: 'Estado de actuadores actualizado correctamente' });
+  } catch (error: any) {
+    console.error('Error al recibir estado de actuadores del ESP32:', error);
+    res.status(500).json({ error: 'Error al actualizar estado de actuadores' });
+  }
+});
+
 export default router;
