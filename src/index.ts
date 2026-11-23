@@ -78,14 +78,12 @@ app.use(cors({
 app.use(morgan('dev'));
 app.use(express.json());
 
-// ─── Rutas públicas ───────────────────────────────────────────────────────────
-app.get('/health', (_req: Request, res: Response) => {
+// ─── Rutas públicas (Health check & keep-alive) ───────────────────────────────
+const responderHealth = (_req: Request, res: Response) => {
   res.status(200).json({ status: 'ok' });
-});
+};
 
-app.get('/api/health', (_req: Request, res: Response) => {
-  res.status(200).json({ status: 'ok' });
-});
+app.all(['/', '/health', '/api', '/api/health'], responderHealth);
 
 // ─── Rutas protegidas ─────────────────────────────────────────────────────────
 

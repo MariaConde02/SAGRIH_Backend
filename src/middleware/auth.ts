@@ -50,8 +50,15 @@ export function generateToken(user: any) {
  */
 export function verificarSesion(req: any, res: any, next: any) {
   // ── Exclusión para endpoints públicos de health check ───────────────────────
-  const ruta = (req.originalUrl || req.url || req.path || '').split('?')[0];
-  if (ruta === '/health' || ruta === '/api/health' || req.path === '/health' || req.path === '/api/health') {
+  const ruta = (req.originalUrl || req.url || req.path || '').split('?')[0].replace(/\/+$/, '');
+  if (
+    ruta === '' ||
+    ruta === '/health' ||
+    ruta === '/api' ||
+    ruta === '/api/health' ||
+    req.path === '/health' ||
+    req.path === '/api/health'
+  ) {
     return next();
   }
 
