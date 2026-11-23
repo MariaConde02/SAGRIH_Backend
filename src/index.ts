@@ -78,10 +78,16 @@ app.use(cors({
 app.use(morgan('dev'));
 app.use(express.json());
 
-// ─── Rutas ────────────────────────────────────────────────────────────────────
-app.get('/api/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString(), version: '1.0.0' });
+// ─── Rutas públicas ───────────────────────────────────────────────────────────
+app.get('/health', (_req: Request, res: Response) => {
+  res.status(200).json({ status: 'ok' });
 });
+
+app.get('/api/health', (_req: Request, res: Response) => {
+  res.status(200).json({ status: 'ok' });
+});
+
+// ─── Rutas protegidas ─────────────────────────────────────────────────────────
 
 app.use('/api/auth', authRoutes);
 app.use('/api/riego', riegoRoutes);
@@ -111,7 +117,18 @@ escucharMensajesTelegram();   // Long Polling bidireccional (Módulo 6 · Onboar
 startCronJobs();
 
 // ─── Arrancar ─────────────────────────────────────────────────────────────────
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`SAGRIH API corriendo en http://localhost:${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/api/health`);
+});
+
+server.on('error', (err: any) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n[FATAL] El puerto ${PORT} ya está en uso.`);
+    console.error(`Hay otra instancia o proceso ocupando el puerto ${PORT}.`);
+    console.error(`Para liberarlo en PowerShell, ejecuta:`);
+    console.error(`  Stop-Process -Id (Get-NetTCPConnection -LocalPort ${PORT}).OwningProcess -Force\n`);
+  } else {
+    console.error('Error al iniciar el servidor:', err);
+  }
 });

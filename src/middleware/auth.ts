@@ -49,6 +49,12 @@ export function generateToken(user: any) {
  * después del login).
  */
 export function verificarSesion(req: any, res: any, next: any) {
+  // ── Exclusión para endpoints públicos de health check ───────────────────────
+  const ruta = (req.originalUrl || req.url || req.path || '').split('?')[0];
+  if (ruta === '/health' || ruta === '/api/health' || req.path === '/health' || req.path === '/api/health') {
+    return next();
+  }
+
   // ── Soporte para dispositivos IoT / ESP32 mediante encabezado x-api-key ─────
   const apiKey = req.headers['x-api-key'];
   const expectedApiKey = process.env.IOT_API_KEY || 'sagrih-iot-key-2026';
