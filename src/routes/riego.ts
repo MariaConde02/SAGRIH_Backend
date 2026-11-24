@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware, checkRole } from '../middleware/auth.js';
 import { RiegoService } from '../services/riegoService.js';
+import { AuditoriaService } from '../services/auditoriaService.js';
 import { notificarRolesTelegram, notificarRestablecimiento } from '../services/telegramService.js';
 import { prisma } from '../db/prismaClient.js';
 
@@ -210,6 +211,35 @@ router.post('/detener', checkRole(['Administrador', 'Supervisor']), async (req: 
     res.status(200).json(data);
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Error al detener riego' });
+  }
+});
+
+// ─── Activación de Modo Manual Sectorizado con Auditoría ─────────────────────
+router.post('/modo-manual', async (req: any, res) => {
+  try {
+    const { motivo, descripcion, canteros, invernaderoId, alcance } = req.body;
+    const userId = req.user?.id;
+
+    const resultado = await AuditoriaService.registrarModoManual(userId || null, {
+      motivo,
+      descripcion,
+      canteros,
+      invernaderoId,
+      alcance
+    });
+
+    res.status(201).json({ success: true, ...resultado });
+  } catch (error: any) {
+    if (
+      error.message.includes('obligatorio') ||
+      error.message.includes('obligatoria') ||
+      error.message.includes('inválido') ||
+      error.message.includes('al menos un cantero')
+    ) {
+      return res.status(400).json({ error: error.message });
+    }
+    console.error('Error en /riego/modo-manual:', error.message);
+    res.status(500).json({ error: 'Error al activar modo manual' });
   }
 });
 

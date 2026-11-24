@@ -8,14 +8,31 @@ router.use(authMiddleware);
 
 router.post('/', async (req: any, res) => {
   try {
-    const { accion, detalle } = req.body;
+    const { accion, detalle, motivo, descripcion, canteros, invernaderoId, alcance } = req.body;
     const userId = req.user?.id;
+
+    if (accion === 'Cambio a Modo Manual' || motivo !== undefined) {
+      const resultado = await AuditoriaService.registrarModoManual(userId || null, {
+        motivo,
+        descripcion: descripcion || (typeof detalle === 'string' && detalle.trim() ? detalle : undefined),
+        canteros,
+        invernaderoId,
+        alcance
+      });
+      return res.status(201).json({ success: true, ...resultado });
+    }
 
     await AuditoriaService.registrar(userId || null, accion, detalle || null);
     
     res.status(201).json({ success: true });
   } catch (error: any) {
-    if (error.message.includes('requerida')) {
+    if (
+      error.message.includes('requerida') ||
+      error.message.includes('obligatorio') ||
+      error.message.includes('obligatoria') ||
+      error.message.includes('inválido') ||
+      error.message.includes('al menos un cantero')
+    ) {
       return res.status(400).json({ error: error.message });
     }
     console.error('Error al registrar auditoría:', error.message);
