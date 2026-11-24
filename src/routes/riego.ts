@@ -315,7 +315,10 @@ router.post('/estado', async (req, res) => {
         await prisma.tt_dispo.updateMany({
           where: {
             cante_id: v.canteroId,
-            tm_tipod: { tipod_nm: 'Válvula' }
+            OR: [
+              { tm_tipod: { tipod_nm: { contains: 'lvula', mode: 'insensitive' } } },
+              { tipod_id: 4 }
+            ]
           },
           data: { dispo_et: estadoDb }
         });

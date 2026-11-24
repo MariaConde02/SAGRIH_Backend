@@ -30,7 +30,13 @@ export class RiegoService {
       }
 
       const openValvesCount = await prisma.tt_dispo.count({
-        where: { tm_tipod: { tipod_nm: 'Válvula' }, dispo_et: 'Abierta' }
+        where: {
+          OR: [
+            { tm_tipod: { tipod_nm: { contains: 'lvula', mode: 'insensitive' } } },
+            { tipod_id: 4 }
+          ],
+          dispo_et: 'Abierta'
+        }
       });
 
       let caudalActual = 0;
@@ -89,16 +95,25 @@ export class RiegoService {
 
       const operaciones: any[] = [
         prisma.th_rihri.updateMany({
-          where: { rihri_ff: null, ...dondeRiegos },
+          where: {
+            OR: [
+              { rihri_ff: null },
+              { rihri_ff: { gt: new Date() } }
+            ],
+            ...dondeRiegos
+          },
           data: { rihri_ff: new Date(), rihri_ta: 'Emergencia' }
         }),
         prisma.tt_dispo.updateMany({
           where: {
-            tm_tipod: { tipod_nm: 'Válvula' },
+            OR: [
+              { tm_tipod: { tipod_nm: { contains: 'lvula', mode: 'insensitive' } } },
+              { tipod_id: 4 }
+            ],
             dispo_et: 'Abierta',
             ...(inverId ? { OR: [{ inver_id: inverId }, { cante_id: { in: canteIds } }] } : {}),
           },
-          data: { dispo_et: 'Cerrada' }
+          data: { dispo_et: 'Operativo' }
         }),
         prisma.th_audit.create({
           data: {
@@ -460,6 +475,18 @@ export class RiegoService {
           }
         });
 
+        // 1. Abrir la válvula asociada al cantero en TT_DISPO
+        await tx.tt_dispo.updateMany({
+          where: {
+            cante_id: canteroId,
+            OR: [
+              { tm_tipod: { tipod_nm: { contains: 'lvula', mode: 'insensitive' } } },
+              { tipod_id: 4 }
+            ]
+          },
+          data: { dispo_et: 'Abierta' }
+        });
+
         const dispositivosCantero = await tx.tt_dispo.findMany({
           where: { cante_id: canteroId },
           select: { dispo_id: true }
@@ -481,7 +508,7 @@ export class RiegoService {
           data: {
             usuar_id: userId,
             audit_ac: 'Apertura de válvula manual',
-            audit_ds: `Apertura remota de válvula en Cantero ${canteroId}. Duración: ${duracion} min`
+            audit_ds: `Apertura remota de válvula en Cantero ${canteroId}. Duración: ${d} min`
           }
         });
 
@@ -501,45 +528,226 @@ export class RiegoService {
         const riegoActivo = await tx.th_rihri.findFirst({
           where: {
             cante_id: canteroId,
-            rihri_ff: { gt: new Date() }
+            OR: [
+              { rihri_ff: null },
+              { rihri_ff: { gt: new Date() } }
+            ]
           },
           orderBy: { rihri_fi: 'desc' }
         });
 
         if (riegoActivo) {
-          // 1. Detener el riego
+          // 1. Detener el riego en TH_RIHRI
           await tx.th_rihri.update({
             where: { rihri_id: riegoActivo.rihri_id },
             data: { rihri_ff: new Date() }
           });
-          
-          // 2. Cerrar la válvula
-          const valvula = await tx.tt_dispo.findFirst({
-            where: { cante_id: canteroId, tm_tipod: { tipod_nm: 'Válvula' } }
-          });
-          
-          if (valvula) {
-            await tx.tt_dispo.update({
-              where: { dispo_id: valvula.dispo_id },
-              data: { dispo_et: 'Operativo' }
-            });
-          }
-
-          // 3. Crear auditoría
-          await tx.th_audit.create({
-            data: {
-              usuar_id: userId,
-              audit_ac: 'Cierre de válvula manual',
-              audit_ds: `Cierre remoto forzado de válvula en Cantero ${canteroId}`
-            }
-          });
         }
+          
+        // 2. Cerrar la válvula (retorno a estado Operativo)
+        await tx.tt_dispo.updateMany({
+          where: {
+            cante_id: canteroId,
+            OR: [
+              { tm_tipod: { tipod_nm: { contains: 'lvula', mode: 'insensitive' } } },
+              { tipod_id: 4 }
+            ]
+          },
+          data: { dispo_et: 'Operativo' }
+        });
+
+        // 3. Crear auditoría
+        await tx.th_audit.create({
+          data: {
+            usuar_id: userId,
+            audit_ac: 'Cierre de válvula manual',
+            audit_ds: `Cierre remoto forzado de válvula en Cantero ${canteroId}`
+          }
+        });
         
         return { success: true, message: 'Riego detenido manualmente' };
       });
     } catch (error: any) {
       console.error('Service Error - detenerRiegoManual:', error);
       throw new Error('Error al detener riego');
+    }
+  }
+
+  /**
+   * Inicia un riego automático programado vinculado a TT_PROGR.
+   * Abre la válvula en TT_DISPO ('Abierta') y registra la ventana activa en TH_RIHRI.
+   */
+  static async ejecutarRiegoProgramado(canteroId: string, progrId?: number, duracionMinutos: number = 10) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const ff = new Date(Date.now() + duracionMinutos * 60000);
+
+        const nuevoRiego = await tx.th_rihri.create({
+          data: {
+            cante_id: canteroId,
+            rihri_ta: 'Automático',
+            rihri_vl: 0,
+            rihri_ff: ff,
+            progr_id: progrId ?? null
+          }
+        });
+
+        await tx.tt_dispo.updateMany({
+          where: {
+            cante_id: canteroId,
+            OR: [
+              { tm_tipod: { tipod_nm: { contains: 'lvula', mode: 'insensitive' } } },
+              { tipod_id: 4 }
+            ]
+          },
+          data: { dispo_et: 'Abierta' }
+        });
+
+        return nuevoRiego;
+      });
+    } catch (error: any) {
+      console.error('Service Error - ejecutarRiegoProgramado:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Inicia un riego de emergencia (activado por umbral hídrico crítico).
+   * Abre la válvula en TT_DISPO ('Abierta') y registra la ventana activa en TH_RIHRI.
+   */
+  static async ejecutarRiegoEmergencia(canteroId: string, duracionMinutos: number = 10, litros?: number) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const ff = new Date(Date.now() + duracionMinutos * 60000);
+
+        const nuevoRiego = await tx.th_rihri.create({
+          data: {
+            cante_id: canteroId,
+            rihri_ta: 'Emergencia',
+            rihri_vl: litros ? Number(litros) : 0,
+            rihri_ff: ff
+          }
+        });
+
+        await tx.tt_dispo.updateMany({
+          where: {
+            cante_id: canteroId,
+            OR: [
+              { tm_tipod: { tipod_nm: { contains: 'lvula', mode: 'insensitive' } } },
+              { tipod_id: 4 }
+            ]
+          },
+          data: { dispo_et: 'Abierta' }
+        });
+
+        return nuevoRiego;
+      });
+    } catch (error: any) {
+      console.error('Service Error - ejecutarRiegoEmergencia:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Cierra automáticamente las válvulas abiertas en TT_DISPO cuyos riegos en TH_RIHRI ya hayan vencido (rihri_ff <= now).
+   * Mantiene TT_DISPO.DISPO_ET coherente ante timeouts de riegos manuales, programados y de emergencia.
+   */
+  static async sincronizarValvulasVencidas() {
+    try {
+      const ahora = new Date();
+
+      const valvulasAbiertas = await prisma.tt_dispo.findMany({
+        where: {
+          dispo_et: 'Abierta',
+          cante_id: { not: null },
+          OR: [
+            { tm_tipod: { tipod_nm: { contains: 'lvula', mode: 'insensitive' } } },
+            { tipod_id: 4 }
+          ]
+        },
+        select: { dispo_id: true, cante_id: true }
+      });
+
+      for (const v of valvulasAbiertas) {
+        if (!v.cante_id) continue;
+
+        const riegoActivo = await prisma.th_rihri.findFirst({
+          where: {
+            cante_id: v.cante_id,
+            OR: [
+              { rihri_ff: null },
+              { rihri_ff: { gt: ahora } }
+            ]
+          }
+        });
+
+        if (!riegoActivo) {
+          await prisma.tt_dispo.update({
+            where: { dispo_id: v.dispo_id },
+            data: { dispo_et: 'Operativo' }
+          });
+        }
+      }
+    } catch (error: any) {
+      console.error('Error sincronizando válvulas vencidas:', error);
+    }
+  }
+
+  /**
+   * Evalúa TT_PROGR para iniciar riegos automáticos programados cuando coincide la hora y día.
+   */
+  static async verificarProgramasRiego() {
+    try {
+      const ahora = new Date();
+      const diaNum = ahora.getDay() === 0 ? 7 : ahora.getDay();
+
+      const estop = await prisma.tt_estop.findFirst({
+        where: { estop_av: true, estop_fn: { gt: ahora } }
+      });
+      if (estop && !estop.inver_id) return; // Parada global activa
+
+      const programas = await prisma.tt_progr.findMany({
+        where: {
+          progr_at: true,
+          deletedAt: null,
+          tt_progd: { some: { progd_da: diaNum } },
+          tm_cante: { deletedAt: null }
+        },
+        include: { tm_cante: true }
+      });
+
+      const horaLocalH = ahora.getHours();
+      const horaLocalM = ahora.getMinutes();
+      const horaUtcH = ahora.getUTCHours();
+      const horaUtcM = ahora.getUTCMinutes();
+
+      for (const prog of programas) {
+        if (!prog.progr_hi) continue;
+        if (estop && estop.inver_id && prog.tm_cante?.inver_id === estop.inver_id) continue;
+
+        const hProg = prog.progr_hi.getUTCHours();
+        const mProg = prog.progr_hi.getUTCMinutes();
+
+        const coincideUtc = (hProg === horaUtcH && mProg === horaUtcM);
+        const coincideLocal = (hProg === horaLocalH && mProg === horaLocalM);
+        if (!coincideUtc && !coincideLocal) continue;
+
+        const dosMinAtras = new Date(ahora.getTime() - 2 * 60 * 1000);
+        const yaEjecutado = await prisma.th_rihri.findFirst({
+          where: {
+            cante_id: prog.cante_id,
+            progr_id: prog.progr_id,
+            rihri_fi: { gte: dosMinAtras }
+          }
+        });
+
+        if (yaEjecutado) continue;
+
+        await RiegoService.ejecutarRiegoProgramado(prog.cante_id, prog.progr_id, prog.progr_dr);
+        console.log(`[RIEGO-PROGRAMADO] Riego iniciado en Cantero ${prog.cante_id} (Programa ID: ${prog.progr_id})`);
+      }
+    } catch (error: any) {
+      console.error('Service Error - verificarProgramasRiego:', error);
     }
   }
 
@@ -567,7 +775,13 @@ export class RiegoService {
       }
 
       const openValvesCount = await prisma.tt_dispo.count({
-        where: { tm_tipod: { tipod_nm: 'Válvula' }, dispo_et: 'Abierta' }
+        where: {
+          OR: [
+            { tm_tipod: { tipod_nm: { contains: 'lvula', mode: 'insensitive' } } },
+            { tipod_id: 4 }
+          ],
+          dispo_et: 'Abierta'
+        }
       });
 
       let caudalActual = 0;

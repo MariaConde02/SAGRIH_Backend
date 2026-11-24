@@ -4,6 +4,7 @@ import { evaluarAlertas } from './alertService.js';
 import { notificarCriticos } from './telegramService.js';
 import { enviarCorreoHTML, generarPlantillaCierreDiario } from './email.service.js';
 import { enviarMensajeTelegram } from './telegram.service.js';
+import { RiegoService } from './riegoService.js';
 
 /**
  * Rollup diario de telemetría y Purga TTL (Módulo 7: Monitoreo y Almacenamiento).
@@ -474,12 +475,22 @@ export const startCronJobs = () => {
   // Ejecutar inmediatamente al iniciar el servidor
   processScheduledMaintenance();
   runMotorAlertas();
+  RiegoService.sincronizarValvulasVencidas().catch(() => {});
+  RiegoService.verificarProgramasRiego().catch(() => {});
 
   // Y luego periódicamente
   setInterval(processScheduledMaintenance, 3600 * 1000);
   setInterval(runMotorAlertas, 60 * 1000);
+  setInterval(() => {
+    RiegoService.sincronizarValvulasVencidas().catch(() => {});
+  }, 10 * 1000); // Sincronizar válvulas vencidas cada 10s
+  setInterval(() => {
+    RiegoService.verificarProgramasRiego().catch(() => {});
+  }, 30 * 1000); // Evaluar programas de riego cada 30s
+
   console.log("Motor cron de mantenimientos inicializado.");
   console.log("Motor de evaluación de alertas hídricas/térmicas inicializado (cada 60s).");
+  console.log("Motor de sincronización de válvulas y programas de riego inicializado (cada 10s/30s).");
 };
 
 export const iniciarCronJobs = startCronJobs;

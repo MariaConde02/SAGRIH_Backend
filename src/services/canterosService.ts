@@ -1,7 +1,11 @@
 import { prisma } from '../db/prismaClient.js';
+import { RiegoService } from './riegoService.js';
 
 export class CanterosService {
   static async getCanteros() {
+    // Sincronizar automáticamente el estado de válvulas cuyos riegos ya concluyeron
+    await RiegoService.sincronizarValvulasVencidas();
+
     const canteros = await prisma.tm_cante.findMany({
       where: { deletedAt: null },
       include: {
@@ -13,7 +17,12 @@ export class CanterosService {
           }
         },
         th_rihri: {
-          where: { rihri_ff: { gt: new Date() } },
+          where: {
+            OR: [
+              { rihri_ff: null },
+              { rihri_ff: { gt: new Date() } }
+            ]
+          },
           orderBy: { rihri_fi: 'desc' },
           take: 1
         }
@@ -74,8 +83,14 @@ export class CanterosService {
         return latest ? latest.toISOString() : null;
       })(),
       valvula: (() => {
-        const v = r.tt_dispo.find((d: any) => d.tm_tipod?.tipod_nm?.toLowerCase().includes('válvula'));
-        return v ? (v.dispo_et === 'Abierta' ? 'abierta' : 'cerrada') : 'cerrada';
+        const v = r.tt_dispo.find((d: any) =>
+          d.tipod_id === 4 ||
+          d.tm_tipod?.tipod_nm?.toLowerCase().includes('valv') ||
+          d.tm_tipod?.tipod_nm?.toLowerCase().includes('válv')
+        );
+        const hayRiegoActivo = Boolean(r.th_rihri && r.th_rihri.length > 0);
+        const estaAbiertaDb = v?.dispo_et?.toLowerCase() === 'abierta';
+        return (estaAbiertaDb || hayRiegoActivo) ? 'abierta' : 'cerrada';
       })(),
       riegoFin: r.th_rihri?.[0]?.rihri_ff ? r.th_rihri[0].rihri_ff.toISOString() : null
     }));
