@@ -22,6 +22,14 @@ router.post('/', async (req: any, res) => {
       return res.status(201).json({ success: true, ...resultado });
     }
 
+    if (accion === 'Cambio a Modo Automático') {
+      const resultado = await AuditoriaService.registrarModoAutomatico(userId || null, {
+        invernaderoId,
+        detalle: typeof detalle === 'string' ? detalle : undefined
+      });
+      return res.status(201).json({ success: true, ...resultado });
+    }
+
     await AuditoriaService.registrar(userId || null, accion, detalle || null);
     
     res.status(201).json({ success: true });

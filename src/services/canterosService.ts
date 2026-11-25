@@ -41,6 +41,7 @@ export class CanterosService {
       overrideMax: r.cante_ma != null ? Number(r.cante_ma) : null,
       invernaderoId: r.inver_id,
       estado: r.cante_est === false ? 'Inactivo' : 'Activo',
+      modoManual: Boolean(r.cante_modo_manual),
       ancho: r.cante_an ? Number(r.cante_an) : null,
       largo: r.cante_la ? Number(r.cante_la) : null,
       posXM: r.pos_xm ? Number(r.pos_xm) : null,

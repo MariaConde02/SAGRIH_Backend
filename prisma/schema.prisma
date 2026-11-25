@@ -53,6 +53,7 @@ model tm_cante {
   orienta   String?    @default("horizontal") @db.VarChar(20)
   cante_fs  DateTime?  @db.Date
   cante_est Boolean?   @default(true)
+  cante_modo_manual Boolean?   @default(false)
   deletedAt DateTime?
   th_rihri  th_rihri[]
   tm_culti  tm_culti?  @relation(fields: [culti_id], references: [culti_id], onDelete: NoAction, onUpdate: NoAction)
@@ -60,6 +61,8 @@ model tm_cante {
   tt_dispo  tt_dispo[]
   tt_progr  tt_progr[]
   th_suelo  th_suelo[]
+
+  @@index([inver_id, cante_modo_manual], map: "idx_cante_inver_mm")
 }
 
 model tm_categ {

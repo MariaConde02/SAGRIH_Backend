@@ -243,6 +243,38 @@ router.post('/modo-manual', async (req: any, res) => {
   }
 });
 
+// ─── Retorno a Modo Automático con Auditoría y Persistencia ──────────────────
+router.post('/modo-automatico', async (req: any, res) => {
+  try {
+    const { invernaderoId, detalle } = req.body;
+    const userId = req.user?.id;
+
+    const resultado = await AuditoriaService.registrarModoAutomatico(userId || null, {
+      invernaderoId,
+      detalle
+    });
+
+    res.status(200).json({ success: true, ...resultado });
+  } catch (error: any) {
+    console.error('Error en /riego/modo-automatico:', error.message);
+    res.status(500).json({ error: 'Error al restablecer modo automático' });
+  }
+});
+
+// ─── Consulta del Estado Real de Modo de Operación (TM_CANTE) ─────────────────
+router.get('/modo-operacion', async (req: any, res) => {
+  try {
+    const { invernaderoId } = req.query;
+    const estado = await AuditoriaService.obtenerEstadoModoOperacion(
+      typeof invernaderoId === 'string' ? invernaderoId : undefined
+    );
+    res.json(estado);
+  } catch (error: any) {
+    console.error('Error en /riego/modo-operacion:', error.message);
+    res.status(500).json({ error: 'Error al consultar modo de operación' });
+  }
+});
+
 router.get('/metricas', async (req, res) => {
   try {
     const data = await RiegoService.getMetricas();
