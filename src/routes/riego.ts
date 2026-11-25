@@ -192,9 +192,11 @@ router.post('/bomba', checkRole(['Administrador', 'Supervisor']), async (req, re
   }
 });
 
-router.post('/ejecutar', checkRole(['Administrador', 'Supervisor']), async (req: any, res) => {
+router.post('/ejecutar', checkRole(['Administrador', 'Supervisor', 'Ingeniero']), async (req: any, res) => {
   try {
-    const { canteroId, duracion, litros } = req.body;
+    const rawCanteroId = req.body?.canteroId;
+    const canteroId = typeof rawCanteroId === 'object' && rawCanteroId?.canteroId ? rawCanteroId.canteroId : rawCanteroId;
+    const { duracion, litros } = req.body;
     if (!canteroId) return res.status(400).json({ error: 'Cantero requerido' });
     const data = await RiegoService.ejecutarRiegoManual(req.user.id, canteroId, duracion, litros);
     res.status(201).json(data);
@@ -203,9 +205,10 @@ router.post('/ejecutar', checkRole(['Administrador', 'Supervisor']), async (req:
   }
 });
 
-router.post('/detener', checkRole(['Administrador', 'Supervisor']), async (req: any, res) => {
+router.post('/detener', checkRole(['Administrador', 'Supervisor', 'Ingeniero']), async (req: any, res) => {
   try {
-    const { canteroId } = req.body;
+    const rawCanteroId = req.body?.canteroId;
+    const canteroId = typeof rawCanteroId === 'object' && rawCanteroId?.canteroId ? rawCanteroId.canteroId : rawCanteroId;
     if (!canteroId) return res.status(400).json({ error: 'Cantero requerido' });
     const data = await RiegoService.detenerRiegoManual(req.user.id, canteroId);
     res.status(200).json(data);

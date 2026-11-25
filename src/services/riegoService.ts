@@ -461,13 +461,14 @@ export class RiegoService {
 
   static async ejecutarRiegoManual(userId: number, canteroId: string, duracion?: number, litros?: number) {
     try {
+      const cId = typeof canteroId === 'object' && (canteroId as any)?.canteroId ? (canteroId as any).canteroId : String(canteroId);
       return await prisma.$transaction(async (tx) => {
-        const d = duracion ? Number(duracion) : 10;
-        const ff = new Date(Date.now() + d * 60000);
+        const d = duracion !== undefined && duracion !== null ? Number(duracion) : 10;
+        const ff = d > 0 ? new Date(Date.now() + d * 60000) : null;
         
         await tx.th_rihri.create({
           data: {
-            cante_id: canteroId,
+            cante_id: cId,
             rihri_ta: 'Manual',
             rihri_vl: litros ? Number(litros) : 0,
             rihri_ff: ff,
@@ -478,7 +479,7 @@ export class RiegoService {
         // 1. Abrir la válvula asociada al cantero en TT_DISPO
         await tx.tt_dispo.updateMany({
           where: {
-            cante_id: canteroId,
+            cante_id: cId,
             OR: [
               { tm_tipod: { tipod_nm: { contains: 'lvula', mode: 'insensitive' } } },
               { tipod_id: 4 }
@@ -488,7 +489,7 @@ export class RiegoService {
         });
 
         const dispositivosCantero = await tx.tt_dispo.findMany({
-          where: { cante_id: canteroId },
+          where: { cante_id: cId },
           select: { dispo_id: true }
         });
         
@@ -508,7 +509,9 @@ export class RiegoService {
           data: {
             usuar_id: userId,
             audit_ac: 'Apertura de válvula manual',
-            audit_ds: `Apertura remota de válvula en Cantero ${canteroId}. Duración: ${d} min`
+            audit_ds: d > 0
+              ? `Apertura remota de válvula en Cantero ${cId}. Duración: ${d} min`
+              : `Apertura remota de válvula en Cantero ${cId}`
           }
         });
 
@@ -522,32 +525,26 @@ export class RiegoService {
 
   static async detenerRiegoManual(userId: number, canteroId: string) {
     try {
+      const cId = typeof canteroId === 'object' && (canteroId as any)?.canteroId ? (canteroId as any).canteroId : String(canteroId);
       // Usamos Interactive Transaction para asegurarnos de que la válvula 
       // y la auditoría se creen/actualicen de forma 100% atómica.
       return await prisma.$transaction(async (tx) => {
-        const riegoActivo = await tx.th_rihri.findFirst({
+        // 1. Detener todos los riegos activos en TH_RIHRI para este cantero
+        await tx.th_rihri.updateMany({
           where: {
-            cante_id: canteroId,
+            cante_id: cId,
             OR: [
               { rihri_ff: null },
               { rihri_ff: { gt: new Date() } }
             ]
           },
-          orderBy: { rihri_fi: 'desc' }
+          data: { rihri_ff: new Date() }
         });
-
-        if (riegoActivo) {
-          // 1. Detener el riego en TH_RIHRI
-          await tx.th_rihri.update({
-            where: { rihri_id: riegoActivo.rihri_id },
-            data: { rihri_ff: new Date() }
-          });
-        }
           
         // 2. Cerrar la válvula (retorno a estado Operativo)
         await tx.tt_dispo.updateMany({
           where: {
-            cante_id: canteroId,
+            cante_id: cId,
             OR: [
               { tm_tipod: { tipod_nm: { contains: 'lvula', mode: 'insensitive' } } },
               { tipod_id: 4 }
@@ -561,7 +558,7 @@ export class RiegoService {
           data: {
             usuar_id: userId,
             audit_ac: 'Cierre de válvula manual',
-            audit_ds: `Cierre remoto forzado de válvula en Cantero ${canteroId}`
+            audit_ds: `Cierre remoto forzado de válvula en Cantero ${cId}`
           }
         });
         
